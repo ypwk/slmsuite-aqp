@@ -4,7 +4,7 @@ Helper functions for manipulating phase patterns.
 
 import numpy as np
 from scipy.spatial import distance
-from scipy.spatial import Voronoi, voronoi_plot_2d
+from scipy.spatial import Voronoi, voronoi_plot_2d, cKDTree
 import cv2
 import matplotlib.pyplot as plt
 import warnings
@@ -22,28 +22,28 @@ LENGTH_FACTORS = {
     "um": 1,
     "nm": 1e-3,
 }
-LENGTH_LABELS = {k : k for k in LENGTH_FACTORS.keys()}
+LENGTH_LABELS = {k: k for k in LENGTH_FACTORS.keys()}
 LENGTH_LABELS["um"] = r"$\mu$m"
 
 CAMERA_UNITS = ["ij"]
 
 BLAZE_LABELS = {
-    "rad":  (r"$\theta_x$ [rad]", r"$\theta_y$ [rad]"),
+    "rad": (r"$\theta_x$ [rad]", r"$\theta_y$ [rad]"),
     "mrad": (r"$\theta_x$ [mrad]", r"$\theta_y$ [mrad]"),
-    "deg":  (r"$\theta_x$ [$^\circ$]", r"$\theta_y$ [$^\circ$]"),
+    "deg": (r"$\theta_x$ [$^\circ$]", r"$\theta_y$ [$^\circ$]"),
     "norm": (r"$k_x/k$", r"$k_y/k$"),
-    "kxy":  (r"$k_x/k$", r"$k_y/k$"),
-    "knm":  (r"$k_n$ [pix]", r"$k_m$ [pix]"),
+    "kxy": (r"$k_x/k$", r"$k_y/k$"),
+    "knm": (r"$k_n$ [pix]", r"$k_m$ [pix]"),
     "freq": (r"$f_x$ [1/pix]", r"$f_y$ [1/pix]"),
     "lpmm": (r"$k_x/2\pi$ [1/mm]", r"$k_y/2\pi$ [1/mm]"),
-    "zernike":  (r"$Z_1^1$ [Zernike rad]", r"$Z_1^{-1}$ [Zernike rad]"),
-    "ij":   (r"Camera $i$ [pix]", r"Camera $j$ [pix]"),
+    "zernike": (r"$Z_1^1$ [Zernike rad]", r"$Z_1^{-1}$ [Zernike rad]"),
+    "ij": (r"Camera $i$ [pix]", r"Camera $j$ [pix]"),
 }
 for prefix, name in zip(["", "mag_"], ["Camera", "Experiment"]):
     for k in LENGTH_FACTORS.keys():
         u = LENGTH_LABELS[k]
-        BLAZE_LABELS[prefix+k] = (f"{name} $x$ [{u}]", f"{name} $y$ [{u}]"),
-        CAMERA_UNITS.append(prefix+k)
+        BLAZE_LABELS[prefix + k] = ((f"{name} $x$ [{u}]", f"{name} $y$ [{u}]"),)
+        CAMERA_UNITS.append(prefix + k)
 
 BLAZE_UNITS = list(BLAZE_LABELS.keys())
 
@@ -85,7 +85,9 @@ def convert_blaze_radius(*args, **kwargs):
     return convert_radius(*args, **kwargs)
 
 
-def convert_vector(vector, from_units="norm", to_units="norm", hardware=None, shape=None):
+def convert_vector(
+    vector, from_units="norm", to_units="norm", hardware=None, shape=None
+):
     r"""
     Helper function for vector unit conversions in the :math:`k`-space of the SLM.
 
@@ -218,17 +220,19 @@ def convert_vector(vector, from_units="norm", to_units="norm", hardware=None, sh
     """
     # Parse units.
     if not (from_units in BLAZE_UNITS):
-        raise ValueError(f"From unit '{from_units}' not recognized \
-                         as a valid unit. Options: {BLAZE_UNITS}")
+        raise ValueError(
+            f"From unit '{from_units}' not recognized \
+                         as a valid unit. Options: {BLAZE_UNITS}"
+        )
     if not (to_units in BLAZE_UNITS):
-        raise ValueError(f"To unit '{to_units}' not recognized \
-                         as a valid unit. Options: {BLAZE_UNITS}")
+        raise ValueError(
+            f"To unit '{to_units}' not recognized \
+                         as a valid unit. Options: {BLAZE_UNITS}"
+        )
 
     # Parse vectors.
     vector_parsed = format_vectors(
-        vector,
-        expected_dimension=2,
-        handle_dimension="pass"
+        vector, expected_dimension=2, handle_dimension="pass"
     ).astype(float)
 
     if from_units == to_units:
@@ -236,7 +240,7 @@ def convert_vector(vector, from_units="norm", to_units="norm", hardware=None, sh
 
     vector_xy = vector_parsed[:2, :]
     if vector_parsed.shape[0] > 2:
-        vector_z =  vector_parsed[[2], :]
+        vector_z = vector_parsed[[2], :]
     else:
         vector_z = None
 
@@ -330,7 +334,8 @@ def convert_vector(vector, from_units="norm", to_units="norm", hardware=None, sh
     elif from_units in CAMERA_UNITS:
         unit = from_units.split("_")[-1]
         rad = cameraslm.ijcam_to_kxyslm(vector_xy * LENGTH_FACTORS[unit] / cam_pitch_um)
-        if "mag_" in from_units: rad *= cameraslm.mag
+        if "mag_" in from_units:
+            rad *= cameraslm.mag
 
     # Convert from normalized "kxy" units to the desired xy output units.
     if to_units == "norm" or to_units == "kxy" or to_units == "rad":
@@ -352,7 +357,8 @@ def convert_vector(vector, from_units="norm", to_units="norm", hardware=None, sh
     elif to_units in CAMERA_UNITS:
         unit = to_units.split("_")[-1]
         vector_xy = cameraslm.kxyslm_to_ijcam(rad) * cam_pitch_um / LENGTH_FACTORS[unit]
-        if "mag_" in to_units: vector_xy /= cameraslm.mag
+        if "mag_" in to_units:
+            vector_xy /= cameraslm.mag
 
     # Z
 
@@ -362,7 +368,8 @@ def convert_vector(vector, from_units="norm", to_units="norm", hardware=None, sh
             if from_units != "ij":
                 unit = from_units.split("_")[-1]
                 vector_z *= LENGTH_FACTORS[unit] / np.mean(cam_pitch_um)
-                if "mag_" in from_units: vector_z /= cameraslm.mag
+                if "mag_" in from_units:
+                    vector_z /= cameraslm.mag
 
             focal_power = cameraslm._ijcam_to_kxyslm_depth(vector_z)
 
@@ -378,7 +385,8 @@ def convert_vector(vector, from_units="norm", to_units="norm", hardware=None, sh
             if to_units != "ij":
                 unit = to_units.split("_")[-1]
                 vector_z *= np.mean(cam_pitch_um) / LENGTH_FACTORS[unit]
-                if "mag_" in to_units: vector_z *= cameraslm.mag
+                if "mag_" in to_units:
+                    vector_z *= cameraslm.mag
 
         elif to_units == "zernike":
             vector_z = focal_power * ((zernike_scale * zernike_scale) / (8 * np.pi))
@@ -411,7 +419,9 @@ def print_blaze_conversions(vector, from_units="norm", **kwargs):
         print("'{}' : {}".format(unit, result.T[0, :]))
 
 
-def convert_radius(radius, from_units="norm", to_units="norm", hardware=None, shape=None):
+def convert_radius(
+    radius, from_units="norm", to_units="norm", hardware=None, shape=None
+):
     """
     Helper function for scalar unit conversions.
     Uses :meth:`convert_vector` to deduce the (average, in the case of an
@@ -442,10 +452,18 @@ def convert_radius(radius, from_units="norm", to_units="norm", hardware=None, sh
         (0, 0), from_units=from_units, to_units=to_units, hardware=hardware, shape=shape
     )
     vx = convert_vector(
-        (radius, 0), from_units=from_units, to_units=to_units, hardware=hardware, shape=shape
+        (radius, 0),
+        from_units=from_units,
+        to_units=to_units,
+        hardware=hardware,
+        shape=shape,
     )
     vy = convert_vector(
-        (0, radius), from_units=from_units, to_units=to_units, hardware=hardware, shape=shape
+        (0, radius),
+        from_units=from_units,
+        to_units=to_units,
+        hardware=hardware,
+        shape=shape,
     )
     return np.mean([np.linalg.norm(vx - v0), np.linalg.norm(vy - v0)])
 
@@ -506,10 +524,9 @@ def window_slice(window, shape=None, centered=False, circular=False):
             xc = xi + int((window[1] - 1) / 2)
             yc = yi + int((window[3] - 1) / 2)
 
-            rr_grid = (
-                (window[3] ** 2) * np.square(x_grid.astype(float) - xc) +
-                (window[1] ** 2) * np.square(y_grid.astype(float) - yc)
-            )
+            rr_grid = (window[3] ** 2) * np.square(x_grid.astype(float) - xc) + (
+                window[1] ** 2
+            ) * np.square(y_grid.astype(float) - yc)
 
             mask_grid = rr_grid <= (window[1] ** 2) * (window[3] ** 2) / 4.0
 
@@ -585,7 +602,12 @@ def window_extent(window, padding_frac=0, padding_pix=0):
         limits.append(tuple(limit))
 
     # Return desired format.
-    return (limits[0][0], limits[0][1] - limits[0][0], limits[1][0], limits[1][1] - limits[1][0])
+    return (
+        limits[0][0],
+        limits[0][1] - limits[0][0],
+        limits[1][0],
+        limits[1][1] - limits[1][0],
+    )
 
 
 def voronoi_windows(grid, vectors, radius=None, plot=False):
@@ -657,7 +679,9 @@ def voronoi_windows(grid, vectors, radius=None, plot=False):
     vectors_voronoi = np.concatenate(
         (
             vectors.T,
-            np.array([[hsx, -3 * hsy], [hsx, 5 * hsy], [-3 * hsx, hsy], [5 * hsx, hsy]]),
+            np.array(
+                [[hsx, -3 * hsy], [hsx, 5 * hsy], [-3 * hsx, hsy], [5 * hsx, hsy]]
+            ),
         )
     )
 
@@ -698,7 +722,9 @@ def voronoi_windows(grid, vectors, radius=None, plot=False):
             canvas2 = np.zeros(shape, dtype=np.uint8)
             cv2.circle(canvas2, point, int(np.ceil(radius)), 255, -1)
 
-            filled_regions.append((canvas1 > 0) & (canvas2 > 0) & np.logical_not(already_filled))
+            filled_regions.append(
+                (canvas1 > 0) & (canvas2 > 0) & np.logical_not(already_filled)
+            )
         else:
             filled_regions.append((canvas1 > 0) & np.logical_not(already_filled))
 
@@ -832,14 +858,16 @@ def imprint(
             matrix[slice_] = function
         else:
             matrix[slice_] = function(
-                transform_grid((x_grid[slice_], y_grid[slice_]), transform, shift), **kwargs
+                transform_grid((x_grid[slice_], y_grid[slice_]), transform, shift),
+                **kwargs,
             )
     elif imprint_operation == "add":
         if is_float:
             matrix[slice_] += function
         else:
             matrix[slice_] += function(
-                transform_grid((x_grid[slice_], y_grid[slice_]), transform, shift), **kwargs
+                transform_grid((x_grid[slice_], y_grid[slice_]), transform, shift),
+                **kwargs,
             )
     else:
         raise ValueError("Unrecognized imprint operation {}.".format(imprint_operation))
@@ -909,19 +937,24 @@ def format_vectors(vectors, expected_dimension=2, handle_dimension="pass"):
 
     if vectors.shape[0] == expected_dimension:
         pass
-    elif vectors.shape[0] > expected_dimension:     # Handle unexpected case.
+    elif vectors.shape[0] > expected_dimension:  # Handle unexpected case.
         if handle_dimension == "pass":
             pass
         elif handle_dimension == "crop":
             if vectors.shape[0] > expected_dimension:
-                vectors = vectors[:expected_dimension,:]
+                vectors = vectors[:expected_dimension, :]
             else:
-                raise ValueError(f"{vectors.shape[0]}-vectors too small to crop to {expected_dimension}-vectors.")
+                raise ValueError(
+                    f"{vectors.shape[0]}-vectors too small to crop to {expected_dimension}-vectors."
+                )
         elif handle_dimension == "error":
-            raise ValueError(f"Expected {expected_dimension}-vectors. Found {vectors.shape[0]}-vectors.")
+            raise ValueError(
+                f"Expected {expected_dimension}-vectors. Found {vectors.shape[0]}-vectors."
+            )
     else:
-        raise ValueError(f"Expected {expected_dimension}-vectors. Found {vectors.shape[0]}-vectors.")
-
+        raise ValueError(
+            f"Expected {expected_dimension}-vectors. Found {vectors.shape[0]}-vectors."
+        )
 
     return vectors
 
@@ -951,7 +984,9 @@ def format_2vectors(vectors):
     return format_vectors(vectors, expected_dimension=2, handle_dimension="crop")
 
 
-def fit_3pt(y0, y1, y2, N=None, x0=(0, 0), x1=(1, 0), x2=(0, 1), orientation_check=False):
+def fit_3pt(
+    y0, y1, y2, N=None, x0=(0, 0), x1=(1, 0), x2=(0, 1), orientation_check=False
+):
     r"""
     Fits three points to an affine transformation. This transformation is given by:
 
@@ -1065,14 +1100,16 @@ def fit_3pt(y0, y1, y2, N=None, x0=(0, 0), x1=(1, 0), x2=(0, 1), orientation_che
     dx2 = x2 - x0
 
     # Invert the index matrix.
-    colinear = np.abs(np.sum(dx1 * dx2)) == np.sqrt(np.sum(dx1 * dx1) * np.sum(dx2 * dx2))
+    colinear = np.abs(np.sum(dx1 * dx2)) == np.sqrt(
+        np.sum(dx1 * dx1) * np.sum(dx2 * dx2)
+    )
     if colinear:
         raise ValueError("Indices must not be colinear.")
 
     J = np.linalg.inv(np.squeeze(np.array([[dx1[0], dx2[0]], [dx1[1], dx2[1]]])))
 
     # Construct the matrix.
-    M = np.matmul(np.squeeze(np.array([[y1[0,0], y2[0,0]], [y1[1,0], y2[1,0]]])), J)
+    M = np.matmul(np.squeeze(np.array([[y1[0, 0], y2[0, 0]], [y1[1, 0], y2[1, 0]]])), J)
     b = y0 - np.matmul(M, x0)
 
     # Deal with N and make indices.
@@ -1112,6 +1149,37 @@ def fit_3pt(y0, y1, y2, N=None, x0=(0, 0), x1=(1, 0), x2=(0, 1), orientation_che
             indices = indices[:, 0:-2]
 
         return np.array(np.matmul(M, indices) + b)
+
+
+def smallest_3D_distance(vectors, metric="chebyshev"):
+    """
+    Returns the smallest distance between pairs of 3D points under a given ``metric``.
+    Uses cKDTree for efficient nearest neighbor search in 3D space.
+    """
+    # Ensure vectors are in the correct format
+    vectors = np.asarray(vectors)
+    if vectors.shape[0] != 3:
+        raise ValueError("Each vector must be a 3D point.")
+
+    N = vectors.shape[1]
+    if N <= 1:
+        return np.inf
+
+    # Map metric to p-norm for cKDTree
+    if metric == "euclidean":
+        p = 2
+    elif metric == "chebyshev":
+        p = np.inf
+    elif metric == "cityblock" or metric == "manhattan":
+        p = 1
+    else:
+        raise ValueError(f"Unsupported metric '{metric}' for cKDTree.")
+
+    # Build the k-d tree and query the nearest neighbor
+    tree = cKDTree(vectors)
+    distances, _ = tree.query(vectors, k=2, p=p)
+    min_distance = np.min(distances[:, 1])  # distances[:, 0] is zero (distance to self)
+    return min_distance
 
 
 def smallest_distance(vectors, metric="chebyshev"):
@@ -1154,7 +1222,7 @@ def smallest_distance(vectors, metric="chebyshev"):
         N = v.shape[0]
 
         if N > min_div:
-            M = int(N/2)
+            M = int(N / 2)
 
             # Divide the problem recursively.
             d1 = _divide_and_conquer_recursive(v[:M, :], metric, axis)
@@ -1164,18 +1232,18 @@ def smallest_distance(vectors, metric="chebyshev"):
             d = min(d1, d2)
 
             # Leave if we don't need to merge.
-            if (v[M, axis] - v[M+1, axis]) > d:
+            if (v[M, axis] - v[M + 1, axis]) > d:
                 return d
 
             # Merge around average x0 between two sections.
-            x0 = (v[M, axis] + v[M+1, axis]) / 2
+            x0 = (v[M, axis] + v[M + 1, axis]) / 2
             mask = np.abs(v[:, axis] - x0) < d
             subset = v[mask, :]
 
             return min(d, distance.pdist(subset, metric=metric).min())
         else:
             # Use pdist as a fast low-level distance calculator.
-            return  distance.pdist(v, metric=metric).min()
+            return distance.pdist(v, metric=metric).min()
 
     vectors = format_2vectors(vectors)
     N = vectors.shape[1]
@@ -1183,7 +1251,7 @@ def smallest_distance(vectors, metric="chebyshev"):
     if N <= 1:
         return np.inf
 
-    if isinstance(metric, str):     # Divide and conquer.
+    if isinstance(metric, str):  # Divide and conquer.
         if not metric in distance._METRIC_ALIAS:
             raise RuntimeError("Distance metric '{metric}' not recognized by scipy.")
 
@@ -1193,19 +1261,23 @@ def smallest_distance(vectors, metric="chebyshev"):
         # pdist needs transpose.
         vectors = vectors.T
 
-        if N < 2*min_div:
+        if N < 2 * min_div:
             return distance.pdist(vectors, metric=metric).min()
         else:
             centroid = np.max(vectors, axis=axis, keepdims=True)
 
             # Slightly inefficient use of cdist.
-            xorder = distance.cdist(vectors[:,[axis]], centroid[:,[axis]], metric=metric)
+            xorder = distance.cdist(
+                vectors[:, [axis]], centroid[:, [axis]], metric=metric
+            )
 
             I = np.argsort(np.squeeze(xorder))
             vsort = vectors[I, :]
 
-            return _divide_and_conquer_recursive(vsort, metric, axis=axis, min_div=min_div)
-    else:                           # Fallback to brute force.
+            return _divide_and_conquer_recursive(
+                vsort, metric, axis=axis, min_div=min_div
+            )
+    else:  # Fallback to brute force.
         minimum = np.inf
 
         for x in range(N - 1):
@@ -1311,13 +1383,19 @@ def lloyds_points(grid, n_points, iterations=10, plot=False):
         shape = x_grid.shape
 
     vectors = np.vstack(
-        (np.random.randint(0, shape[1], n_points), np.random.randint(0, shape[0], n_points))
+        (
+            np.random.randint(0, shape[1], n_points),
+            np.random.randint(0, shape[0], n_points),
+        )
     )
 
     # Regenerate until no overlaps (improve for performance?)
     while smallest_distance(vectors) < 1:
         vectors = np.vstack(
-            (np.random.randint(0, shape[1], n_points), np.random.randint(0, shape[0], n_points))
+            (
+                np.random.randint(0, shape[1], n_points),
+                np.random.randint(0, shape[0], n_points),
+            )
         )
 
     grid2 = np.meshgrid(range(shape[1]), range(shape[0]))
@@ -1446,7 +1524,7 @@ def transform_grid(grid, transform=None, shift=None, direction="fwd"):
         transform = 0
     if not np.isscalar(transform):
         transform = np.squeeze(transform)
-        if transform.shape != (2,2):
+        if transform.shape != (2, 2):
             raise ValueError("Expected transform to be None, scalar, or a 2x2 matrix.")
 
     # Parse shift.
@@ -1478,14 +1556,22 @@ def transform_grid(grid, transform=None, shift=None, direction="fwd"):
         # Use the matrix to transform the grid.
         if direction == "fwd":
             return (
-                transform[0, 0] * x_grid + shift[0] + transform[0, 1] * y_grid + shift[1],
-                transform[1, 0] * x_grid + shift[0] + transform[1, 1] * y_grid + shift[1],
+                transform[0, 0] * x_grid
+                + shift[0]
+                + transform[0, 1] * y_grid
+                + shift[1],
+                transform[1, 0] * x_grid
+                + shift[0]
+                + transform[1, 1] * y_grid
+                + shift[1],
             )
         elif direction == "rev":
             transform = np.linalg.inv(transform)
             return (
-                transform[0, 0] * (x_grid - shift[0]) + transform[0, 1] * (y_grid - shift[1]),
-                transform[1, 0] * (x_grid - shift[0]) + transform[1, 1] * (y_grid - shift[1]),
+                transform[0, 0] * (x_grid - shift[0])
+                + transform[0, 1] * (y_grid - shift[1]),
+                transform[1, 0] * (x_grid - shift[0])
+                + transform[1, 1] * (y_grid - shift[1]),
             )
 
 
@@ -1519,14 +1605,18 @@ def pad(matrix, shape):
     )
 
     if not (deltashape[0] >= 0 and deltashape[1] >= 0):
-        raise ValueError(f"Shape {tuple(matrix.shape)} is too large to pad to shape {shape}")
+        raise ValueError(
+            f"Shape {tuple(matrix.shape)} is too large to pad to shape {shape}"
+        )
 
     pad_b = int(np.floor(deltashape[0]))
     pad_t = int(np.ceil(deltashape[0]))
     pad_l = int(np.floor(deltashape[1]))
     pad_r = int(np.ceil(deltashape[1]))
 
-    padded = np.pad(matrix, [(pad_b, pad_t), (pad_l, pad_r)], mode="constant", constant_values=0)
+    padded = np.pad(
+        matrix, [(pad_b, pad_t), (pad_l, pad_r)], mode="constant", constant_values=0
+    )
 
     if not padded.shape == shape:
         raise RuntimeError("Padded result should have desired shape.")
@@ -1570,7 +1660,9 @@ def unpad(matrix, shape):
     deltashape = ((shape[0] - mshape[0]) / 2.0, (shape[1] - mshape[1]) / 2.0)
 
     if not (deltashape[0] <= 0 and deltashape[1] <= 0):
-        raise ValueError(f"Shape {tuple(mshape)} is too small to unpad to shape {shape}")
+        raise ValueError(
+            f"Shape {tuple(mshape)} is too small to unpad to shape {shape}"
+        )
 
     pad_b = int(np.floor(-deltashape[0]))
     pad_t = int(mshape[0] - np.ceil(-deltashape[0]))

@@ -34,33 +34,54 @@ to enhance clarity and reduce file length.
 - ``_spots.py`` : Infrastructure for spot-specific holography
   (:class:`SpotHologram`, :class:`CompressedSpotHologram`).
 """
+
 from slmsuite.holography.algorithms._header import *
 
 from slmsuite.holography.algorithms._hologram import Hologram as _Hologram
-from slmsuite.holography.algorithms._feedback import FeedbackHologram as _FeedbackHologram
+from slmsuite.holography.algorithms._feedback import (
+    FeedbackHologram as _FeedbackHologram,
+)
 from slmsuite.holography.algorithms._spots import SpotHologram as _SpotHologram
-from slmsuite.holography.algorithms._spots import CompressedSpotHologram as _CompressedSpotHologram
-from slmsuite.holography.algorithms._multiplane import MultiplaneHologram as _MultiplaneHologram
+from slmsuite.holography.algorithms._spots import (
+    CompressedSpotHologram as _CompressedSpotHologram,
+)
+from slmsuite.holography.algorithms._3dhologram import (
+    SpotHologram3D as _SpotHologram3D,
+)
+from slmsuite.holography.algorithms._multiplane import (
+    MultiplaneHologram as _MultiplaneHologram,
+)
+
 
 # Hack to get automodule to put the classes in the correct location.
 class Hologram(_Hologram):
     pass
 
+
 class FeedbackHologram(_FeedbackHologram):
     pass
+
 
 class SpotHologram(_SpotHologram):
     pass
 
+
 class CompressedSpotHologram(_CompressedSpotHologram):
     pass
 
+
+class SpotHologram3D(_SpotHologram3D):
+    pass
+
+
 class MultiplaneHologram(_MultiplaneHologram):
     pass
+
 
 # Hack to get the class and attribute docs to work.
 Hologram.__doc__ = _Hologram.__doc__
 FeedbackHologram.__doc__ = _FeedbackHologram.__doc__
 SpotHologram.__doc__ = _SpotHologram.__doc__
 CompressedSpotHologram.__doc__ = _CompressedSpotHologram.__doc__
+SpotHologram3D.__doc__ = _SpotHologram3D.__doc__
 MultiplaneHologram.__doc__ = _MultiplaneHologram.__doc__

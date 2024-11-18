@@ -2,39 +2,12 @@ from slmsuite.holography.algorithms._header import *
 from slmsuite.holography.algorithms._stats import _HologramStats
 
 
-if torch is not None:
-
-    class ComplexMSELoss(torch.nn.modules.loss._Loss):
-        __constants__ = ["reduction"]
-
-        def __init__(
-            self, size_average=None, reduce=None, reduction: str = "mean"
-        ) -> None:
-            super().__init__(size_average, reduce, reduction)
-
-        def forward(self, input, target):
-            input_abs = torch.abs(input)
-            return torch.nn.functional.mse_loss(
-                input_abs / Hologram._norm(input_abs, torch),
-                target,
-                reduction=self.reduction,
-            )
-
-    class MaxUniformLoss(torch.nn.modules.loss._Loss):
-        __constants__ = ["reduction"]
-
-        def __init__(
-            self, size_average=None, reduce=None, reduction: str = "mean"
-        ) -> None:
-            super().__init__(size_average, reduce, reduction)
-
-        def forward(self, input, target):
-            return -torch.sum(torch.square(torch.abs(input))) + 10 * torch.std(
-                torch.abs(input)
-            )
+"""
+This file contains code that reproduces what is done in Barredo et al. for 3D optical trap arrays. 
+"""
 
 
-class Hologram(_HologramStats):
+class Hologram3D(_HologramStats):
     r"""
     Phase retrieval methods applied to holography (DFT-based).
     See :meth:`.optimize()` to learn about the methods implemented for hologram optimization.
@@ -375,11 +348,15 @@ class Hologram(_HologramStats):
             if target is None:
                 target = []
         else:  # Other cases
-            if len(target) == 2:  # (int, int) was passed.
-                self.shape = target
+            if len(target) == 3:  # (int, int, int) was passed.
+                self.shape = target[
+                    :2
+                ]  # slm should match first two dimensions of target
+                self.target_shape = target
                 target = None
-            elif len(np.shape(target)) == 2:  # array_like (true target) passed.
-                self.shape = np.shape(target)
+            elif len(np.shape(target)) == 3:  # array_like (true target) passed.
+                self.shape = np.shape(target)[:2]
+                self.target_shape = np.shape(target)
             else:
                 raise ValueError(f"Unexpected target {target}.")
 
@@ -796,7 +773,7 @@ class Hologram(_HologramStats):
             Whether to overwrite ``weights`` with ``target``.
         """
         if new_target is None:
-            self.target = cp.zeros(shape=self.shape, dtype=self.dtype)
+            self.target = cp.zeros(shape=self.target_shape, dtype=self.dtype)
         else:
             self.target = cp.array(
                 new_target,
@@ -1904,7 +1881,7 @@ class Hologram(_HologramStats):
         method = method[4:]
 
         feedback_corrected = xp.array(feedback_amp, copy=True, dtype=self.dtype)
-        feedback_corrected *= 1 / Hologram._norm(feedback_corrected, xp=xp)
+        feedback_corrected *= 1 / Hologram3D._norm(feedback_corrected, xp=xp)
 
         if "wu" in method or "tanh" in method:  # Additive
             feedback_corrected *= -self.flags["feedback_exponent"]
@@ -2108,3 +2085,1462 @@ class Hologram(_HologramStats):
             return xp.sqrt(xp.nansum(xp.square(xp.abs(matrix))))
         else:
             return xp.sqrt(xp.nansum(xp.square(matrix)))
+
+    def plot_farfield(
+        self,
+        source=None,
+        title="",
+        limits=None,
+        units="knm",
+        limit_padding=0.1,
+        figsize=(12, 6),
+        cbar=False,
+        animate_3d=False,
+        frames=100,
+        interval=50,
+    ):
+        """
+        Plots an overview (left) and zoom (right) view of ``source``, with an optional 3D animated plot.
+
+        Parameters
+        ----------
+        source : array_like OR None
+            Should have shape equal to :attr:`shape`.
+            If ``None``, defaults to :attr:`amp_ff`.
+        title : str
+            Title of the plots. If ``"phase"`` is a substring of title, then the source
+            is treated as a phase.
+        limits : ((float, float), (float, float), (float, float)) OR None
+            :math:`x`, :math:`y`, and :math:`z` limits for the zoom plot in ``"knm"`` space.
+        units : str
+            Far-field units for plots.
+        limit_padding : float
+            Fraction of the width and height to expand the limits of the zoom plot by.
+        figsize : tuple
+            Size of the plot.
+        cbar : bool
+            Whether to add colorbars to the plots.
+        animate_3d : bool
+            Whether to animate the 3D plot with sinusoidal motion along the z-axis.
+        frames : int
+            Number of frames for the animation.
+        interval : int
+            Time interval between frames in milliseconds.
+
+        Returns
+        -------
+        ((float, float), (float, float), (float, float))
+            Used ``limits``, which may be autocomputed. Autocomputed limits are returned
+            as integers.
+        """
+        # Parse source
+        if source is None:
+            source = (
+                self.amp_ff if self.amp_ff is not None else self.get_farfield(get=False)
+            )
+
+        # Interpret source and convert to numpy for plotting
+        isphase = "phase" in title.lower()
+        npsource = (
+            np.mod(source.get() if hasattr(source, "get") else source, 2 * np.pi)
+            if isphase
+            else np.abs(source.get() if hasattr(source, "get") else source)
+        )
+
+        # Compute limits if not provided
+        if limits is None:
+            limits = self._compute_limits(npsource, limit_padding=limit_padding)
+
+        # Create figure and subplots
+        fig = plt.figure(figsize=figsize)
+        axs_2d = fig.add_subplot(1, 3 if animate_3d else 2, 1)
+        axs_zoom = fig.add_subplot(1, 3 if animate_3d else 2, 2)
+
+        # Full field plot
+        axs_2d.imshow(
+            npsource,
+            cmap=("twilight" if isphase else None),
+            interpolation=("none" if isphase else "gaussian"),
+        )
+        axs_2d.set_title(f"{title} Full")
+
+        # Zoom plot
+        zoom_data = npsource[
+            np.ix_(
+                np.arange(limits[1][0], limits[1][1]),
+                np.arange(limits[0][0], limits[0][1]),
+            )
+        ]
+        axs_zoom.imshow(
+            zoom_data,
+            cmap=("twilight" if isphase else None),
+            extent=[limits[0][0], limits[0][1], limits[1][1], limits[1][0]],
+            interpolation="none",
+        )
+        axs_zoom.set_title(f"{title} Zoom")
+
+        # 3D Animation
+        if animate_3d:
+            ax_3d = fig.add_subplot(1, 3, 3, projection="3d")
+            x = np.linspace(0, npsource.shape[1], npsource.shape[1])
+            y = np.linspace(0, npsource.shape[0], npsource.shape[0])
+            X, Y = np.meshgrid(x, y)
+
+            # Initialize the 3D surface
+            Z = npsource
+            surf = ax_3d.plot_surface(
+                X, Y, Z, cmap="viridis" if not isphase else "twilight", edgecolor="none"
+            )
+            ax_3d.set_zlim(0, np.nanmax(npsource) * 1.5)
+            ax_3d.set_title(f"{title} 3D View")
+            ax_3d.set_xlabel("X axis")
+            ax_3d.set_ylabel("Y axis")
+            ax_3d.set_zlabel("Amplitude")
+
+            # Update function for animation
+            def update(frame):
+                ax_3d.clear()
+                Z = npsource * np.sin(2 * np.pi * frame / frames)
+                ax_3d.plot_surface(
+                    X,
+                    Y,
+                    Z,
+                    cmap="viridis" if not isphase else "twilight",
+                    edgecolor="none",
+                )
+                ax_3d.set_zlim(0, np.nanmax(npsource) * 1.5)
+                ax_3d.set_title(f"{title} 3D View - Frame {frame}")
+                ax_3d.set_xlabel("X axis")
+                ax_3d.set_ylabel("Y axis")
+                ax_3d.set_zlabel("Amplitude")
+
+            # Create the animation
+            ani = FuncAnimation(
+                fig, update, frames=frames, interval=interval, repeat=True
+            )
+
+        # Show colorbar if requested
+        if cbar:
+            fig.colorbar(axs_zoom.images[0], ax=axs_zoom, orientation="vertical")
+
+        plt.tight_layout()
+        plt.show()
+
+        return limits
+
+
+class FeedbackHologram3D(Hologram3D):
+    """
+    Experimental holography aided by camera feedback.
+    Contains mechanisms for hologram positioning and camera feedback aided by a
+    :class:`~slmsuite.hardware.cameraslms.FourierSLM`.
+
+    Attributes
+    ----------
+    cameraslm : slmsuite.hardware.cameraslms.FourierSLM OR None OR (int, int)
+        A hologram with experimental feedback needs access to an SLM and camera.
+        If ``None``, no feedback is applied (mostly defaults to :class:`Hologram`).
+    _cam_points : numpy.ndarray
+        Array containing points corresponding to the corners of the camera in the SLM's
+        k-space. At the moment, this is only used for plotting.
+        First point is repeated at the end.
+    target_ij :  array_like OR None
+        Amplitude target in the ``"ij"`` (camera) basis. Of same ``shape`` as the camera in
+        :attr:`cameraslm`.  Counterpart to :attr:`target` which is in the ``"knm"``
+        (computational k-space) basis.
+    img_ij, img_knm
+        Cached **amplitude** feedback image in the
+        ``"ij"`` (raw camera) basis or
+        ``"knm"`` (transformed to computational k-space) basis.
+        Measured with :meth:`.measure()`.
+    """
+
+    def __init__(
+        self,
+        shape,
+        target_ij=None,
+        cameraslm=None,
+        null_region=None,
+        null_region_radius_frac=None,
+        **kwargs,
+    ):
+        """
+        Initializes a hologram with camera feedback.
+
+        Parameters
+        ----------
+        shape : (int, int)
+            Computational shape of the SLM in :mod:`numpy` `(h, w)` form. See :meth:`.Hologram.__init__()`.
+        target_ij : array_like OR None
+            See :attr:`target_ij`.
+            Is ``None`` only if the :attr:`target` will be generated by other means
+            (used by subclass :class:`SpotHologram`). This should not generally be used.
+
+            Note
+            ~~~~
+            There is not currently a way to request a target in the ``"knm"`` basis and
+            use the camera for feedback. In particular, the analog ``knmslm_to_ijcam``
+            for :meth:`ijcam_to_knmslm()` is not written, but is definitely possible.
+        cameraslm : slmsuite.hardware.cameraslms.FourierSLM OR slmsuite.hardware.slms.SLM OR None
+            Provides access to experimental feedback.
+            If an :class:`~slmsuite.hardware.slms.SLM` is passed, the attribute is set to ``None``,
+            but the information contained in the SLM is passed to the superclass :class:`.Hologram`.
+            See :attr:`cameraslm`.
+        null_region : array_like OR None
+            Array of shape :attr:`shape`. Where ``True``, sets the background to zero
+            instead of ``nan``. If ``None``, has no effect.
+        null_region_radius_frac : float OR None
+            Helper function to set the ``null_region`` to zero for Fourier space radius fractions above
+            ``null_region_radius_frac``. This is useful to prevent power being deflected
+            to very high orders, which are unlikely to be properly represented in
+            practice on a physical SLM.
+        **kwargs
+            Passed to :meth:`Hologram.__init__`.
+        """
+        # Use the Hologram constructor to initialize self.target with proper shape,
+        # pass other arguments (esp. slm_shape).
+        self.cameraslm = cameraslm
+        if self.cameraslm is not None:
+            # Determine camera size in SLM-space.
+            try:
+                amp = self.cameraslm.slm._get_source_amplitude()
+                slm_shape = self.cameraslm.slm.shape
+            except:
+                # See if an SLM was passed.
+                try:
+                    amp = self.cameraslm._get_source_amplitude()
+                    slm_shape = self.cameraslm.shape
+
+                    # We don't have access to all the calibration stuff, so don't
+                    # confuse the rest of the init/etc.
+                    self.cameraslm = None
+                except:
+                    raise ValueError(
+                        "Expected a CameraSLM or SLM to be passed to cameraslm."
+                    )
+
+        else:
+            amp = kwargs.pop("amp", None)
+            slm_shape = None
+
+        if not "slm_shape" in kwargs:
+            kwargs["slm_shape"] = slm_shape
+
+        super().__init__(target=shape, amp=amp, **kwargs)
+
+        self.img_ij = None
+        self.img_knm = None
+        if target_ij is None:
+            self.target_ij = None
+        else:
+            self.target_ij = target_ij.astype(self.dtype)
+
+        if self.cameraslm is not None and "fourier" in self.cameraslm.calibrations:
+            # Generate a list of the corners of the camera, for plotting.
+            cam_shape = self.cameraslm.cam.shape
+
+            ll = [0, 0]
+            lr = [0, cam_shape[0] - 1]
+            ur = [cam_shape[1] - 1, cam_shape[0] - 1]
+            ul = [cam_shape[1] - 1, 0]
+
+            points_ij = toolbox.format_2vectors(np.vstack((ll, lr, ur, ul, ll)).T)
+            points_kxy = self.cameraslm.ijcam_to_kxyslm(points_ij)
+            self._cam_points = toolbox.convert_vector(
+                points_kxy,
+                from_units="kxy",
+                to_units="knm",
+                hardware=self.cameraslm.slm,
+                shape=self.shape,
+            )
+
+            # Transform the target, if it is provided.
+            if target_ij is not None:
+                self.update_target(
+                    target_ij, null_region, null_region_radius_frac, reset_weights=True
+                )
+
+        else:
+            self._cam_points = None
+
+    # Image transformation helper function.
+    def ijcam_to_knmslm(self, img, out=None, blur_ij=None, order=3):
+        """
+        Convert an image in the camera domain to computational SLM k-space using, in part, the
+        affine transformation stored in a cameraslm's Fourier calibration.
+
+        Note
+        ~~~~
+        This includes two transformations:
+
+        - The affine transformation ``"ij"`` -> ``"kxy"`` (camera pixels to normalized k-space).
+        - The scaling ``"kxy"`` -> ``"knm"`` (normalized k-space to computational k-space pixels).
+
+        Parameters
+        ----------
+        img : numpy.ndarray OR cupy.ndarray
+            Image to transform. This should be the same shape as images returned by the camera.
+        out : numpy.ndarray OR cupy.ndarray OR None
+            If ``out`` is not ``None``, this array will be used to write the memory in-place.
+        blur_ij : int OR None
+            Applies a ``blur_ij`` pixel-width Gaussian blur to ``img``.
+            If ``None``, defaults to the ``"blur_ij"`` flag if present; otherwise zero.
+        order : int
+            Order of interpolation used for transformation. Defaults to 3 (cubic).
+
+        Returns
+        -------
+        numpy.ndarray OR cupy.ndarray
+            Image transformed into ``"knm"`` space.
+        """
+        if self.cameraslm is None:
+            raise RuntimeError(
+                "Cannot use ijcam_to_knmslm without the calibrations in a cameraslm."
+            )
+        if not "fourier" in self.cameraslm.calibrations:
+            raise RuntimeError("ijcam_to_knmslm requires a Fourier calibration.")
+
+        # First transformation. FUTURE: make convert_basis to output a matrix like here?
+        conversion = toolbox.convert_vector(
+            (1, 1), "knm", "kxy", hardware=self.cameraslm.slm, shape=self.shape
+        ) - toolbox.convert_vector(
+            (0, 0), "knm", "kxy", hardware=self.cameraslm.slm, shape=self.shape
+        )
+        M1 = np.diag(np.squeeze(conversion))
+        b1 = np.matmul(
+            M1, -toolbox.format_2vectors(np.flip(np.squeeze(self.shape)) / 2)
+        )
+
+        # Second transformation.
+        M2 = self.cameraslm.calibrations["fourier"]["M"]
+        b2 = self.cameraslm.calibrations["fourier"]["b"]
+        if "a" in self.cameraslm.calibrations["fourier"]:
+            b2 -= np.matmul(M2, self.cameraslm.calibrations["fourier"]["a"])
+
+        # Composite transformation (along with xy -> yx).
+        M = cp.array(np.flip(np.flip(np.matmul(M2, M1), axis=0), axis=1))
+        b = cp.array(np.flip(np.squeeze(np.matmul(M2, b1) + b2)))
+
+        # See if the user wants to blur.
+        if blur_ij is None:
+            if "blur_ij" in self.flags:
+                blur_ij = self.flags["blur_ij"]
+            else:
+                blur_ij = 0
+
+        # FUTURE: use cp_gaussian_filter (faster?); was having trouble with cp_gaussian_filter.
+        if blur_ij > 0:
+            img = sp_gaussian_filter(img, (blur_ij, blur_ij), output=img, truncate=2)
+
+        cp_img = cp.array(img, dtype=self.dtype)
+        cp.abs(cp_img, out=cp_img)
+
+        # Perform affine.
+        target = cp_affine_transform(
+            input=cp_img,
+            matrix=M,
+            offset=b,
+            output_shape=self.shape,
+            order=order,
+            output=out,
+            mode="constant",
+            cval=np.nan,
+        )
+
+        # Filter the image. FUTURE: fix.
+        # target = cp_gaussian_filter1d(target, blur, axis=0, output=target, truncate=2)
+        # target = cp_gaussian_filter1d(target, blur, axis=1, output=target, truncate=2)
+
+        target = cp.abs(target, out=target)
+        norm = Hologram._norm(target)
+        target *= 1 / norm
+
+        if norm == 0:
+            raise ValueError(
+                "No power in hologram. Maybe target_ij is out of range of knm space? "
+                "Check transformations."
+            )
+
+        return target
+
+    # Measurement.
+    def measure(self, basis="ij"):
+        """
+        Method to request a measurement to occur. If :attr:`img_ij` is ``None``,
+        then a new image will be grabbed from the camera (this is done automatically in
+        algorithms).
+
+        Parameters
+        ----------
+        basis : str
+            The cached image to be sure to fill with new data.
+            Can be ``"ij"`` or ``"knm"``.
+
+            - If ``"knm"``, then :attr:`img_ij` and :attr:`img_knm` are filled.
+            - If ``"ij"``, then :attr:`img_ij` is filled, and :attr:`img_knm` is ignored.
+
+            This is useful to avoid (expensive) transformation from the ``"ij"`` to the
+            ``"knm"`` basis if :attr:`img_knm` is not needed.
+        """
+        if self.img_ij is None and (basis == "knm" or basis == "ij"):
+            # Apply the pattern to the SLM at the desired depth (implemented by propagation_kernel)
+            self.cameraslm.slm.set_phase(
+                self.get_phase(include_propagation=True), settle=True
+            )
+
+            # Measure the result.
+            self.cameraslm.cam.flush()
+            self.img_ij = np.array(
+                self.cameraslm.cam.get_image(),
+                copy=(False if np.__version__[0] == "1" else None),
+                dtype=self.dtype,
+            )
+
+            if basis == "knm":  # Compute the knm basis image.
+                self.img_knm = self.ijcam_to_knmslm(self.img_ij, out=self.img_knm)
+                cp.sqrt(self.img_knm, out=self.img_knm)
+            else:  # The old image is outdated, erase it. FUTURE: memory concerns?
+                self.img_knm = None
+
+            self.img_ij = np.sqrt(
+                self.img_ij
+            )  # Don't load to the GPU if not necessary.
+        elif basis == "knm":
+            if self.img_knm is None:
+                self.img_knm = self.ijcam_to_knmslm(
+                    np.square(self.img_ij), out=self.img_knm
+                )
+                cp.sqrt(self.img_knm, out=self.img_knm)
+        elif basis == "ij":
+            pass
+        else:
+            raise ValueError(
+                f"Unrecognized measurement basis '{basis}'. Options are 'ij' or 'knm'"
+            )
+
+    # Target update.
+    def update_target(
+        self,
+        new_target_ij,
+        null_region=None,
+        null_region_radius_frac=None,
+        reset_weights=False,
+    ):
+        """
+        Change the target to something new. This method handles cleaning and normalization.
+
+        Parameters
+        ----------
+        new_target_ij : array_like OR None
+            New :attr:`target_ij` to optimize towards *in the camera basis*.
+            should be of the same shape as the camera.
+            Also updates :attr:`target` using the stored Fourier calibration.
+        null_region : array_like OR None
+            Array of shape :attr:`shape`. Where ``True``, sets the background to zero
+            instead of ``nan``. If ``None``, has no effect.
+        null_region_radius_frac : float OR None
+            Helper function to set the ``null_region`` to zero for Fourier space radius fractions above
+            ``null_region_radius_frac``. This is useful to prevent power being deflected
+            to very high orders, which are unlikely to be properly represented in
+            practice on a physical SLM. If ``None``, defaults to 1 and there is no null region.
+        reset_weights : bool
+            Whether to update the :attr:`weights` to this new :attr:`target`.
+        """
+        self.target_ij = new_target_ij.astype(self.dtype)
+        # Transformation order of zero to prevent nan-blurring in MRAF cases.
+        self.ijcam_to_knmslm(new_target_ij, out=self.target, order=0)
+
+        # Set the null region.
+        undefined = cp.isnan(self.target)
+
+        if null_region_radius_frac is None:
+            null_region_radius_frac = 1
+
+        if null_region_radius_frac < 1:
+            # Build up the null region pattern if we have not already done the transform above.
+            if null_region is None:
+                null_region = cp.zeros(self.shape, dtype=bool)
+
+            # Make a circle, outside of which the null_region is active.
+            xl = cp.linspace(-1, 1, null_region.shape[0])
+            yl = cp.linspace(-1, 1, null_region.shape[1])
+            (xg, yg) = cp.meshgrid(xl, yl)
+            mask = cp.square(xg) + cp.square(yg) > null_region_radius_frac**2
+            null_region[mask] = True
+
+        if null_region_radius_frac >= 1:
+            self.target[undefined] = 0
+        else:
+            self.target[cp.logical_and(undefined, null_region)] = 0
+
+        if reset_weights:
+            self.reset_weights()
+
+    def refine_offset(self, img, basis="kxy"):
+        """
+        **(NotImplemented)**
+        Hones the position of the produced image to the desired target image to compensate for
+        Fourier calibration imperfections. Works either by moving the desired camera
+        target to align where the image ended up (``basis="ij"``) or by moving
+        the :math:`k`-space image to target the desired camera target
+        (``basis="knm"``/``basis="kxy"``). This should be run at the user's request
+        inbetween :meth:`optimize` iterations.
+
+        Parameters
+        ----------
+        img : numpy.ndarray
+            Image measured by the camera.
+        basis : str
+            The correction can be in any of the following bases:
+            - ``"ij"`` changes the pixel that the spot is expected at,
+            - ``"kxy"`` or ``"knm"`` changes the k-vector which the SLM targets.
+            Defaults to ``"kxy"`` if ``None``.
+
+        Returns
+        -------
+        numpy.ndarray
+            Euclidean pixel error in the ``"ij"`` basis for each spot.
+        """
+        # Probably local autocorrelation algorithm.
+
+        raise NotImplementedError()
+
+    # Weighting and stats.
+    def _update_weights(self):
+        """
+        Change :attr:`weights` to optimize towards the :attr:`target` using feedback from
+        :attr:`amp_ff`, the computed farfield amplitude.
+        """
+        feedback = self.flags["feedback"]
+
+        if feedback == "computational":
+            self._update_weights_generic(self.weights, self.amp_ff, self.target)
+        elif feedback == "experimental":
+            self.measure("knm")  # Make sure data is there.
+            self._update_weights_generic(self.weights, self.img_knm, self.target)
+
+    def _calculate_stats_experimental(self, stats, stat_groups=[]):
+        """
+        Wrapped by :meth:`FeedbackHologram._update_stats()`.
+        """
+        if "experimental_knm" in stat_groups:
+            self.measure("knm")  # Make sure data is there.
+
+            stats["experimental_knm"] = self._calculate_stats(
+                self.img_knm,
+                self.target,
+                efficiency_compensation=True,
+                raw="raw_stats" in self.flags and self.flags["raw_stats"],
+            )
+        if "experimental_ij" in stat_groups or "experimental" in stat_groups:
+            self.measure("ij")  # Make sure data is there.
+
+            stats["experimental_ij"] = self._calculate_stats(
+                self.img_ij,
+                self.target_ij,
+                xp=np,
+                efficiency_compensation=True,
+                raw="raw_stats" in self.flags and self.flags["raw_stats"],
+            )
+
+    def _update_stats(self, stat_groups=[]):
+        """
+        Calculate statistics corresponding to the desired ``stat_groups``.
+
+        Parameters
+        ----------
+        stat_groups : list of str
+            Which groups or types of statistics to analyze.
+        """
+        stats = {}
+
+        self._calculate_stats_computational(stats, stat_groups)
+        self._calculate_stats_experimental(stats, stat_groups)
+
+        self._update_stats_dictionary(stats)
+
+
+class _Abstract3DSpotHologram(FeedbackHologram3D):
+    """
+    Abstract class to eventally handle :meth:`SpotHologram.refine_offset()`
+    and other shared methods for :class:`SpotHologram` and :class:`CompressedSpotHologram`.
+    There are many parts of :class:`SpotHologram` with repetition and bloat that
+    can be simplified with more modern features from other parts of :mod:`slmsuite`.
+    """
+
+    pass
+
+    def remove_vortices(self):
+        """Spot holograms do not need to consider vortices."""
+        pass
+
+    # def update_spots(self, source_basis="kxy"):
+    #     pass
+
+
+class SpotHologram3D(_Abstract3DSpotHologram):
+    """
+    Holography optimized for the generation of three dimensional optical focal arrays (DFT-based).
+
+    Is a subclass of :class:`FeedbackHologram`, but falls back to non-camera-feedback
+    routines if :attr:`cameraslm` is not passed.
+
+    Tip
+    ~~~
+    Quality of life features to generate noise regions for mixed region amplitude
+    freedom (MRAF) algorithms are supported. Specifically, set ``null_region``
+    parameters to help specify where the noise region is not.
+
+    Attributes
+    ----------
+    spot_knm, spot_kxy, spot_ij : array_like of float OR None
+        Stored vectors with shape ``(3, N)`` in the style of
+        :meth:`~slmsuite.holography.toolbox.format_vectors()`.
+        These vectors are floats.
+        The subscript refers to the basis of the vectors, the transformations between
+        which are autocomputed.
+        If necessary transformations do not exist, :attr:`spot_ij` is set to ``None``.
+    spot_knm_rounded : array_like of int
+        :attr:`spot_knm` rounded to nearest integers (indices).
+        These vectors are integers.
+        This is necessary because
+        GS algorithms operate on a pixel grid, and the target for each spot in a
+        :class:`SpotHologram` is a single pixel (index).
+    spot_kxy_rounded, spot_ij_rounded : array_like of float
+        Once :attr:`spot_knm_rounded` is rounded, the original :attr:`spot_kxy`
+        and :attr:`spot_ij` are no longer accurate. Transformations are again used
+        to backcompute the positions in the ``"ij"`` and ``"kxy"`` bases corresponding
+        to the true computational location of a given spot.
+        These vectors are floats.
+    spot_amp : array_like of float
+        The target amplitude for each spot.
+        Must have length corresponding to the number of spots.
+        For instance, the user can request dimmer or brighter spots.
+    external_spot_amp : array_like of float
+        When using ``"external_spot"`` feedback or the ``"external_spot"`` stat group,
+        the user must supply external data. This data is transferred through this
+        attribute. For iterative feedback, have the ``callback()`` function set
+        :attr:`external_spot_amp` dynamically. By default, this variable is set to even
+        distribution of amplitude.
+    spot_integration_width_knm : int
+        For spot-specific feedback methods, better SNR is achieved when integrating over
+        many farfield pixels. This variable stores the width of the integration region
+        in ``"knm"`` (farfield) space.
+    spot_integration_width_ij : int
+        For spot-specific feedback methods, better SNR is achieved when integrating over
+        many camera pixels. This variable stores the width of the integration region
+        in ``"ij"`` (camera) space.
+    null_knm : array_like of float OR None
+        In addition to points where power is desired, :class:`SpotHologram` is equipped
+        with quality of life features to select points where power is undesired. These
+        points are stored in :attr:`null_knm` with shape ``(2, M)`` in the style of
+        :meth:`~slmsuite.holography.toolbox.format_2vectors()`. A region around these
+        points is set to zero (null) and not allowed to participate in the noise region.
+    null_radius_knm : float
+        The radius in ``"knm"`` space around the points :attr:`null_knm` to zero or null
+        (prevent from participating in the ``nan`` noise region).
+        This is useful to prevent power being deflected to very high orders,
+        which are unlikely to be properly represented in practice on a physical SLM.
+    null_region_knm : array_like of bool OR ``None``
+        Array of shape :attr:`shape`. Where ``True``, sets the background to zero
+        instead of nan. If ``None``, has no effect.
+    """
+
+    def __init__(
+        self,
+        shape,
+        spot_vectors,
+        basis="kxy",
+        spot_amp=None,
+        cameraslm=None,
+        null_vectors=None,
+        null_radius=None,
+        null_region=None,
+        null_region_radius_frac=None,
+        **kwargs,
+    ):
+        """
+        Initializes a :class:`SpotHologram` targeting given spots at ``spot_vectors``.
+
+        Parameters
+        ----------
+        shape : (int, int)
+            Computational shape of the SLM. See :meth:`.Hologram.__init__()`.
+        spot_vectors : array_like
+            Spot position vectors with shape ``(2, N)`` in the style of
+            :meth:`~slmsuite.holography.toolbox.format_2vectors()`.
+        basis : str
+            The spots can be in any of the following bases:
+
+            - ``"kxy"`` for centered normalized SLM :math:`k`-space (radians),
+            - ``"knm"`` for computational SLM :math:`k`-space (pixels),
+            - ``"ij"`` for camera coordinates (pixels).
+
+            Defaults to ``"kxy"``.
+        spot_amp : array_like OR None
+            The amplitude to target for each spot.
+            See :attr:`SpotHologram.spot_amp`.
+            If ``None``, all spots are assumed to have the same amplitude.
+            Normalization is performed automatically; the user is not required to
+            normalize.
+        cameraslm : slmsuite.hardware.cameraslms.FourierSLM OR None
+            If the ``"ij"`` or ``"kxy"`` bases are chosen, and/or if the user wants to make use of camera
+            feedback, a :class:`slmsuite.hardware.cameraslms.FourierSLM` must be provided.
+        null_vectors : array_like OR None
+            Null position vectors with shape ``(2, N)`` in the style of
+            :meth:`~slmsuite.holography.toolbox.format_2vectors()`.
+            MRAF methods are forced zero around these points.
+        null_radius : float OR None
+            Radius to null around in the given ``basis``.
+            Note that basis conversions are imperfect for anisotropic basis
+            transformations. The radius will always be set to be circular in ``"knm"``
+            space, and will attempt to match to the closest circle
+            to the (potentially elliptical) projection into ``"knm"`` from the given ``basis``.
+        null_region : array_like OR None
+            Array of shape :attr:`shape`. Where ``True``, sets the background to zero
+            instead of ``nan``. If ``None``, has no effect.
+        null_region_radius_frac : float OR None
+            Helper function to set the ``null_region`` to zero for Fourier space radius fractions above
+            ``null_region_radius_frac``. This is useful to prevent power being deflected
+            to very high orders, which are unlikely to be properly represented in
+            practice on a physical SLM.
+        **kwargs
+            Passed to :meth:`.FeedbackHologram.__init__()`.
+        """
+        # Parse vectors.
+        vectors = toolbox.format_vectors(spot_vectors, expected_dimension=3)
+        N = vectors.shape[1]
+
+        # Parse spot_amp.
+        if spot_amp is not None:
+            self.spot_amp = np.ravel(spot_amp)
+            if len(self.spot_amp) != N:
+                raise ValueError(
+                    "spot_amp must have the same length as the provided spots."
+                )
+        else:
+            self.spot_amp = np.full(N, 1.0 / np.sqrt(N))
+
+        # Set the external amp variable to be perfect by default.
+        self.external_spot_amp = np.copy(self.spot_amp)
+
+        # Parse null_vectors
+        if null_vectors is not None:
+            null_vectors = toolbox.format_vectors(null_vectors, expected_dimension=3)
+            if not np.all(np.shape(null_vectors) == np.shape(null_vectors)):
+                raise ValueError(
+                    "null_vectors must have the same length as the provided spots."
+                )
+        else:
+            self.null_knm = None
+            self.null_radius_knm = None
+        self.null_region_knm = None
+
+        # Interpret vectors depending upon the basis.
+        if basis is None or basis == "knm":  # Computational Fourier space of SLM.
+            self.spot_knm = vectors
+
+            if cameraslm is not None:
+                self.spot_kxy = toolbox.convert_vector(
+                    self.spot_knm,
+                    from_units="knm",
+                    to_units="kxy",
+                    hardware=cameraslm,
+                    shape=shape,
+                )
+
+                if "fourier" in cameraslm.calibrations:
+                    self.spot_ij = cameraslm.kxyslm_to_ijcam(self.spot_kxy)
+                else:
+                    self.spot_ij = None
+            else:
+                self.spot_kxy = None
+                self.spot_ij = None
+
+            # Handle null parameters.
+            self.null_knm = null_vectors
+            self.null_radius_knm = null_radius
+            self.null_region_knm = null_region
+        elif basis == "kxy":  # Normalized units.
+            assert cameraslm is not None, "We need a cameraslm to interpret kxy."
+
+            self.spot_kxy = vectors
+
+            if hasattr(cameraslm, "calibrations"):
+                if "fourier" in cameraslm.calibrations:
+                    self.spot_ij = cameraslm.kxyslm_to_ijcam(vectors)
+                    # This is okay for non-feedback GS, so we don't error.
+            else:
+                self.spot_ij = None
+
+            self.spot_knm = toolbox.convert_vector(
+                self.spot_kxy,
+                from_units="kxy",
+                to_units="knm",
+                hardware=cameraslm,
+                shape=shape,
+            )
+        elif basis == "ij":  # Pixel on the camera.
+            assert cameraslm is not None, "We need an cameraslm to interpret ij."
+            assert "fourier" in cameraslm.calibrations, (
+                "We need an cameraslm with "
+                "fourier-calibrated kxyslm_to_ijcam and ijcam_to_kxyslm transforms "
+                "to interpret ij."
+            )
+
+            self.spot_ij = vectors
+            self.spot_kxy = cameraslm.ijcam_to_kxyslm(vectors)
+            self.spot_knm = toolbox.convert_vector(
+                vectors,
+                from_units="ij",
+                to_units="knm",
+                hardware=cameraslm,
+                shape=shape,
+            )
+        else:
+            raise Exception("Unrecognized basis for spots '{}'.".format(basis))
+
+        # Handle null conversions in the ij or kxy cases.
+        if basis == "ij" or basis == "kxy":
+            if null_vectors is not None:
+                # Convert the null vectors.
+                self.null_knm = toolbox.convert_vector(
+                    null_vectors,
+                    from_units=basis,
+                    to_units="knm",
+                    hardware=cameraslm,
+                    shape=shape,
+                )
+
+                # Convert the null radius.
+                if null_radius is not None:
+                    self.null_radius_knm = toolbox.convert_radius(
+                        null_radius,
+                        from_units=basis,
+                        to_units="knm",
+                        hardware=cameraslm,
+                        shape=shape,
+                    )
+                else:
+                    self.null_radius_knm = None
+            else:
+                self.null_knm = None
+                self.null_radius_knm = None
+
+            self.null_region_knm = null_region
+
+        # Generate point spread functions (psf) for the knm and ij bases
+        if cameraslm is not None:
+            psf_kxy = np.mean(cameraslm.slm.get_spot_radius_kxy())
+            psf_knm = toolbox.convert_radius(
+                psf_kxy, "kxy", "knm", cameraslm.slm, shape
+            )
+            psf_ij = toolbox.convert_radius(psf_kxy, "kxy", "ij", cameraslm, shape)
+        else:
+            psf_knm = 0
+            psf_ij = np.nan
+
+        if np.isnan(psf_knm):
+            psf_knm = 0
+        if np.isnan(psf_ij):
+            psf_ij = 0
+
+        # Use semi-arbitrary values to determine integration widths. The default width is:
+        #  - N times the psf,
+        #  - but then clipped to be:
+        #    + larger than 3 and
+        #    + smaller than the minimum inf-norm distance between spots divided by 1.5
+        #      (divided by 1 would correspond to the largest non-overlapping integration
+        #      regions; 1.5 gives comfortable padding)
+        #  - and finally forced to be an odd integer.
+        N = 10  # Future: non-arbitrary
+        min_psf = 3
+
+        dist_knm = np.max([toolbox.smallest_3D_distance(self.spot_knm) / 1.5, min_psf])
+        self.spot_integration_width_knm = np.clip(N * psf_knm, min_psf, dist_knm)
+        self.spot_integration_width_knm = int(
+            2 * np.floor(self.spot_integration_width_knm / 2) + 1
+        )
+
+        if self.spot_ij is not None:
+            dist_ij = np.max(
+                [toolbox.smallest_3D_distance(self.spot_ij) / 1.5, min_psf]
+            )
+            self.spot_integration_width_ij = np.clip(N * psf_ij, min_psf, dist_ij)
+            self.spot_integration_width_ij = int(
+                2 * np.floor(self.spot_integration_width_ij / 2) + 1
+            )
+        else:
+            self.spot_integration_width_ij = None
+
+        # Check to make sure spots are within relevant camera and SLM shapes.
+        if (
+            np.any(self.spot_knm[0] < self.spot_integration_width_knm / 2)
+            or np.any(self.spot_knm[1] < self.spot_integration_width_knm / 2)
+            or np.any(
+                self.spot_knm[0] >= shape[1] - self.spot_integration_width_knm / 2
+            )
+            or np.any(
+                self.spot_knm[1] >= shape[0] - self.spot_integration_width_knm / 2
+            )
+        ):
+            raise ValueError(
+                "Spots outside SLM computational space bounds!\nSpots:\n{}\nBounds: {}".format(
+                    self.spot_knm, shape
+                )
+            )
+
+        if self.spot_ij is not None:
+            cam_shape = cameraslm.cam.shape
+
+            if (
+                np.any(self.spot_ij[0] < self.spot_integration_width_ij / 2)
+                or np.any(self.spot_ij[1] < self.spot_integration_width_ij / 2)
+                or np.any(
+                    self.spot_ij[0] >= cam_shape[1] - self.spot_integration_width_ij / 2
+                )
+                or np.any(
+                    self.spot_ij[1] >= cam_shape[0] - self.spot_integration_width_ij / 2
+                )
+            ):
+                raise ValueError(
+                    "Spots outside camera bounds!\nSpots:\n{}\nBounds: {}".format(
+                        self.spot_ij, cam_shape
+                    )
+                )
+
+        # Decide the null_radius (if necessary)
+        if self.null_knm is not None:
+            if self.null_radius_knm is None:
+                all_spots = np.hstack((self.null_knm, self.spot_knm))
+                self.null_radius_knm = toolbox.smallest_distance(all_spots) / 4
+
+            self.null_radius_knm = int(np.ceil(self.null_radius_knm))
+
+        # Initialize target/etc. Note that this passes through FeedbackHologram.
+        super().__init__(shape, target_ij=None, cameraslm=cameraslm, **kwargs)
+
+        # Parse null_region after __init__
+        if basis == "ij" and null_region is not None:
+            # Transformation order of zero to prevent nan-blurring in MRAF cases.
+            self.null_region_knm = (
+                self.ijcam_to_knmslm(null_region, out=self.null_region_knm, order=0)
+                != 0
+            )
+
+        # If we have an input for null_region_radius_frac, then force the null region to
+        # exclude higher order k-vectors according to the desired exclusion fraction.
+        if null_region_radius_frac is not None:
+            # Build up the null region pattern if we have not already done the transform above.
+            if self.null_region_knm is None:
+                self.null_region_knm = cp.zeros(self.shape, dtype=bool)
+
+            # Make a circle, outside of which the null_region is active.
+            xl = cp.linspace(-1, 1, self.null_region_knm.shape[0])
+            yl = cp.linspace(-1, 1, self.null_region_knm.shape[1])
+            (xg, yg) = cp.meshgrid(xl, yl)
+            mask = cp.square(xg) + cp.square(yg) > null_region_radius_frac**2
+            self.null_region_knm[mask] = True
+
+        # Fill the target with data.
+        self.set_target(reset_weights=True)
+
+    def __len__(self):
+        """
+        Overloads len() to return the number of spots in this :class:`SpotHologram`.
+
+        Returns
+        -------
+        int
+            The length of :attr:`spot_amp`.
+        """
+        return self.spot_knm.shape[1]
+
+    # Target update.
+    @staticmethod
+    def make_rectangular_array(
+        shape,
+        array_shape,
+        array_pitch,
+        array_center=None,
+        basis="knm",
+        orientation_check=False,
+        **kwargs,
+    ):
+        """
+        Helper function to initialize a rectangular 3D array of spots, with certain size and pitch.
+
+        Note
+        ~~~~
+        The array can be in SLM k-space coordinates or in camera pixel coordinates, depending upon
+        the choice of ``basis``. For the ``"ij"`` basis, ``cameraslm`` must be included as one
+        of the ``kwargs``. See :meth:`__init__()` for more ``basis`` information.
+
+        Important
+        ~~~~~~~~~
+        Spot positions will be rounded to the grid of computational k-space ``"knm"``,
+        to create the target image (of finite size) that algorithms optimize towards.
+        Choose ``array_pitch`` and ``array_center`` carefully to avoid undesired pitch
+        non-uniformity caused by this rounding.
+
+        Parameters
+        ----------
+        shape : (int, int)
+            Computational shape of the SLM in :mod:`numpy` `(h, w)` form. See :meth:`.SpotHologram.__init__()`.
+        array_shape : (int, int, int) OR int
+            The size of the rectangular array in number of spots ``(NX, NY, NZ)``.
+            If a scalar N is given, assume ``(N, N, N)``.
+        array_pitch : (float, float) OR float
+            The spacing between spots in the x, y, and z directions ``(pitchx, pitchy, pitchz)``.
+            If a single pitch is given, assume ``(pitch, pitch, pitch)``.
+        array_center : (float, float) OR None
+            The shift of the center of the spot array from the zeroth order.
+            Uses ``(x, y, z)`` form in the chosen basis.
+            If ``None``, defaults to the position of the zeroth order, converted into the
+            relevant basis:
+
+            - If ``"knm"``, this is ``(shape[2], shape[1], shape[0])/2``.
+            - If ``"kxy"``, this is ``(0,0,0)``.
+            - If ``"ij"``, this is the pixel position of the zeroth order on the
+              camera (calculated via Fourier calibration).
+
+        basis : str
+            See :meth:`__init__()`.
+        orientation_check : bool
+            Whether to delete the last two points to check for parity.
+        **kwargs
+            Any other arguments are passed to :meth:`__init__()`.
+        """
+        # Parse size and pitch.
+        if isinstance(array_shape, REAL_TYPES):
+            array_shape = (int(array_shape), int(array_shape), int(array_shape))
+        if isinstance(array_pitch, REAL_TYPES):
+            array_pitch = (array_pitch, array_pitch, array_pitch)
+
+        # Determine array_center default.
+        if array_center is None:
+            if basis == "knm":
+                array_center = (shape[2] / 2.0, shape[1] / 2.0, shape[0] / 2.0)
+            elif basis == "kxy":
+                array_center = (0, 0, 0)
+            elif basis == "ij":
+                assert "cameraslm" in kwargs, "We need an cameraslm to interpret ij."
+                cameraslm = kwargs["cameraslm"]
+                assert cameraslm is not None, "We need an cameraslm to interpret ij."
+                assert "fourier" in cameraslm.calibrations, (
+                    "We need an cameraslm with "
+                    "fourier-calibrated kxyslm_to_ijcam and ijcam_to_kxyslm transforms "
+                    "to interpret ij."
+                )
+
+                array_center = toolbox.convert_vector(
+                    (0, 0, 0), from_units="kxy", to_units="ij", hardware=cameraslm
+                )
+
+        # Make the grid edges.
+        x_edge = np.arange(array_shape[0]) - (array_shape[0] - 1) / 2.0
+        x_edge = x_edge * array_pitch[0] + array_center[0]
+        y_edge = np.arange(array_shape[1]) - (array_shape[1] - 1) / 2.0
+        y_edge = y_edge * array_pitch[1] + array_center[1]
+        z_edge = np.arange(array_shape[2]) - (array_shape[2] - 1) / 2.0
+        z_edge = z_edge * array_pitch[2] + array_center[2]
+
+        # Make the grid lists.
+        x_grid, y_grid, z_grid = np.meshgrid(
+            x_edge, y_edge, z_edge, sparse=False, indexing="xy"
+        )
+        x_list, y_list, z_list = x_grid.ravel(), y_grid.ravel(), z_grid.ravel()
+
+        # Delete the last two points if desired and valid.
+        if orientation_check and len(x_list) > 2:
+            x_list = x_list[:-2]
+            y_list = y_list[:-2]
+            z_list = z_list[:-2]
+
+        vectors = np.vstack((x_list, y_list, z_list))
+
+        # Return a new SpotHologram.
+        return SpotHologram3D(shape, vectors, basis=basis, spot_amp=None, **kwargs)
+
+    def _set_target_spots(self, reset_weights=False):
+        """
+        Wrapped by :meth:`SpotHologram.set_target()`.
+        """
+        # Round the spot points to the nearest integer coordinates in knm space.
+        self.spot_knm_rounded = np.rint(self.spot_knm).astype(int)
+
+        # Convert these to the other coordinate systems if possible.
+        if self.cameraslm is not None:
+            self.spot_kxy_rounded = toolbox.convert_vector(
+                self.spot_knm_rounded,
+                from_units="knm",
+                to_units="kxy",
+                hardware=self.cameraslm.slm,
+                shape=self.shape,
+            )
+
+            if "fourier" in self.cameraslm.calibrations:
+                self.spot_ij_rounded = self.cameraslm.kxyslm_to_ijcam(
+                    self.spot_kxy_rounded
+                )
+            else:
+                self.spot_ij_rounded = None
+        else:
+            self.spot_kxy_rounded = None
+            self.spot_ij_rounded = None
+
+        # Erase previous target in-place.
+        if self.null_knm is None:
+            self.target.fill(0)
+        else:
+            # By default, everywhere is "amplitude free", denoted by nan.
+            self.target.fill(np.nan)
+
+            # Now we start setting areas where null is desired. First, zero the blanket region.
+            if self.null_region_knm is not None:
+                self.target[self.null_region_knm] = 0
+
+            # Second, zero the regions around the "null points".
+            if self.null_knm is not None:
+                all_spots = np.hstack((self.null_knm, self.spot_knm))
+                w = int(2 * self.null_radius_knm + 1)
+
+                for ii in range(all_spots.shape[1]):
+                    toolbox.imprint(
+                        self.target,
+                        (np.rint(all_spots[0, ii]), w, np.rint(all_spots[1, ii]), w),
+                        0,
+                        centered=True,
+                        circular=True,
+                    )
+
+        # Set all the target pixels to the appropriate amplitude.
+        self.target[
+            self.spot_knm_rounded[2, :],
+            self.spot_knm_rounded[1, :],
+            self.spot_knm_rounded[0, :],
+        ] = self.spot_amp
+
+        self.target /= Hologram3D._norm(self.target)
+
+        if reset_weights:
+            self.reset_weights()
+
+    def set_target(self, reset_weights=False, plot=False):
+        """
+        From the spot locations stored in :attr:`spot_knm`, update the target pattern.
+
+        Note
+        ~~~~
+        If there's a ``cameraslm``, updates the :attr:`spot_ij_rounded` attribute
+        corresponding to where pixels in the :math:`k`-space where actually placed (due to rounding
+        to integers, stored in :attr:`spot_knm_rounded`), rather the
+        idealized floats :attr:`spot_knm`.
+
+        Note
+        ~~~~
+        The :attr:`target` and :attr:`weights` matrices are modified in-place for speed,
+        unlike :class:`.Hologram` or :class:`.FeedbackHologram` which make new matrices.
+        This is because spot positions are expected to be corrected using :meth:`refine_offsets()`.
+
+        Parameters
+        ----------
+        reset_weights : bool
+            Whether to reset the :attr:`weights` to this new :attr:`target`.
+        """
+        self._set_target_spots(reset_weights=reset_weights)
+
+    # Weighting and stats.
+    def _update_weights(self):
+        """
+        Change :attr:`weights` to optimize towards the :attr:`target` using feedback from
+        :attr:`amp_ff`, the computed farfield amplitude.
+        """
+        feedback = self.flags["feedback"]
+
+        # Weighting strategy depends on the chosen feedback method.
+        if feedback == "computational":
+            # Pixel-by-pixel weighting
+            self._update_weights_generic(
+                self.weights, self.amp_ff, self.target, nan_checks=True
+            )
+        else:
+            # Integrate a window around each spot, with feedback from respective sources.
+            if feedback == "computational_spot":
+                amp_feedback = cp.sqrt(
+                    analysis.take(
+                        cp.square(self.amp_ff),
+                        self.spot_knm_rounded,
+                        self.spot_integration_width_knm,
+                        centered=True,
+                        integrate=True,
+                        xp=cp,
+                    )
+                )
+            elif feedback == "experimental_spot":
+                self.measure(basis="ij")
+
+                amp_feedback = np.sqrt(
+                    analysis.take(
+                        np.square(
+                            np.array(
+                                self.img_ij,
+                                copy=(False if np.__version__[0] == "1" else None),
+                                dtype=self.dtype,
+                            )
+                        ),
+                        self.spot_ij,
+                        self.spot_integration_width_ij,
+                        centered=True,
+                        integrate=True,
+                    )
+                )
+            elif feedback == "external_spot":
+                amp_feedback = self.external_spot_amp
+            else:
+                raise ValueError("Feedback '{}' not recognized.".format(feedback))
+
+            # Update the weights of single pixels.
+            self.weights[self.spot_knm_rounded[1, :], self.spot_knm_rounded[0, :]] = (
+                self._update_weights_generic(
+                    self.weights[
+                        self.spot_knm_rounded[1, :], self.spot_knm_rounded[0, :]
+                    ],
+                    cp.array(
+                        amp_feedback,
+                        copy=(False if np.__version__[0] == "1" else None),
+                        dtype=self.dtype,
+                    ),
+                    self.spot_amp,
+                    nan_checks=True,
+                )
+            )
+
+    def _calculate_stats_computational_spot(self, stats, stat_groups=[]):
+        """
+        Wrapped by :meth:`SpotHologram._update_stats()`.
+        """
+
+        if "computational_spot" in stat_groups:
+            if self.shape == self.slm_shape:
+                # Spot size is one pixel wide: no integration required.
+                stats["computational_spot"] = self._calculate_stats(
+                    self.amp_ff[
+                        self.spot_knm_rounded[1, :], self.spot_knm_rounded[0, :]
+                    ],
+                    self.spot_amp,
+                    efficiency_compensation=False,
+                    total=cp.sum(cp.square(self.amp_ff)),
+                    raw="raw_stats" in self.flags and self.flags["raw_stats"],
+                )
+            else:
+                # Spot size is wider than a pixel: integrate a window around each spot
+                if cp != np:
+                    pwr_ff = cp.square(self.amp_ff)
+                    pwr_feedback = analysis.take(
+                        pwr_ff,
+                        self.spot_knm,
+                        self.spot_integration_width_knm,
+                        centered=True,
+                        integrate=True,
+                        xp=cp,
+                    )
+
+                    stats["computational_spot"] = self._calculate_stats(
+                        cp.sqrt(pwr_feedback),
+                        self.spot_amp,
+                        xp=cp,
+                        efficiency_compensation=False,
+                        total=cp.sum(pwr_ff),
+                        raw="raw_stats" in self.flags and self.flags["raw_stats"],
+                    )
+                else:
+                    pwr_ff = np.square(self.amp_ff)
+                    pwr_feedback = analysis.take(
+                        pwr_ff,
+                        self.spot_knm,
+                        self.spot_integration_width_knm,
+                        centered=True,
+                        integrate=True,
+                    )
+
+                    stats["computational_spot"] = self._calculate_stats(
+                        np.sqrt(pwr_feedback),
+                        self.spot_amp,
+                        xp=np,
+                        efficiency_compensation=False,
+                        total=np.sum(pwr_ff),
+                        raw="raw_stats" in self.flags and self.flags["raw_stats"],
+                    )
+
+    def _calculate_stats_experimental_spot(self, stats, stat_groups=[]):
+        """
+        Wrapped by :meth:`SpotHologram._update_stats()`.
+        """
+
+        if "experimental_spot" in stat_groups:
+            self.measure(basis="ij")
+
+            pwr_img = np.square(self.img_ij)
+
+            pwr_feedback = analysis.take(
+                pwr_img,
+                self.spot_ij,
+                self.spot_integration_width_ij,
+                centered=True,
+                integrate=True,
+            )
+
+            stats["experimental_spot"] = self._calculate_stats(
+                np.sqrt(pwr_feedback),
+                self.spot_amp,
+                xp=np,
+                efficiency_compensation=False,
+                total=np.sum(pwr_img),
+                raw="raw_stats" in self.flags and self.flags["raw_stats"],
+            )
+
+        if "external_spot" in stat_groups:
+            pwr_feedback = np.square(
+                np.array(
+                    self.external_spot_amp,
+                    copy=(False if np.__version__[0] == "1" else None),
+                    dtype=self.dtype,
+                )
+            )
+            stats["external_spot"] = self._calculate_stats(
+                np.sqrt(pwr_feedback),
+                self.spot_amp,
+                xp=np,
+                efficiency_compensation=False,
+                total=np.sum(pwr_feedback),
+                raw="raw_stats" in self.flags and self.flags["raw_stats"],
+            )
+
+    def _update_stats(self, stat_groups=[]):
+        """
+        Calculate statistics corresponding to the desired ``stat_groups``.
+
+        Parameters
+        ----------
+        stat_groups : list of str
+            Which groups or types of statistics to analyze.
+        """
+        stats = {}
+
+        self._calculate_stats_computational(stats, stat_groups)
+        self._calculate_stats_experimental(stats, stat_groups)
+        self._calculate_stats_computational_spot(stats, stat_groups)
+        self._calculate_stats_experimental_spot(stats, stat_groups)
+
+        self._update_stats_dictionary(stats)
+
+    def refine_offset(self, img=None, basis="kxy", force_affine=True, plot=False):
+        """
+        Hones the positions of the produced spots toward the desired targets to compensate for
+        Fourier calibration imperfections. Works either by moving camera integration
+        regions to the positions where the spots ended up (``basis="ij"``) or by moving
+        the :math:`k`-space targets to target the desired camera pixels
+        (``basis="knm"``/``basis="kxy"``). This should be run at the user's request
+        inbetween :meth:`optimize` iterations.
+
+        Parameters
+        ----------
+        img : numpy.ndarray OR None
+            Image measured by the camera. If ``None``, defaults to :attr:`img_ij` via :meth:`measure()`.
+        basis : str
+            The correction can be in any of the following bases:
+
+            - ``"ij"`` changes the pixel that the spot is expected at,
+            - ``"kxy"``, ``"knm"`` changes the k-vector which the SLM targets.
+
+            Defaults to ``"kxy"``. If basis is set to ``None``, no correction is applied
+            to the data in the :class:`SpotHologram`.
+        force_affine : bool
+            Whether to force the offset refinement to behave as an affine transformation
+            between the original and refined coordinate system. This helps to tame
+            outliers. Defaults to ``True``.
+        plot : bool
+            Enables debug plots.
+
+        Returns
+        -------
+        numpy.ndarray
+            Spot shift in the ``"ij"`` basis for each spot.
+        """
+        # If no image was provided, get one from cache.
+        if img is None:
+            self.measure(basis="ij")
+            img = self.img_ij
+
+        # Take regions around each point from the given image.
+        regions = analysis.take(
+            img,
+            self.spot_ij,
+            self.spot_integration_width_ij,
+            centered=True,
+            integrate=False,
+        )
+
+        # Fast version; have to iterate for accuracy.
+        shift_vectors = analysis.image_positions(regions)
+        shift_vectors = np.clip(
+            shift_vectors,
+            -self.spot_integration_width_ij / 4,
+            self.spot_integration_width_ij / 4,
+        )
+
+        # Store the shift vector before we force_affine.
+        sv1 = self.spot_ij + shift_vectors
+
+        if force_affine:
+            affine = analysis.fit_affine(
+                self.spot_ij, self.spot_ij + shift_vectors, plot=plot
+            )
+            shift_vectors = (
+                np.matmul(affine["M"], self.spot_ij) + affine["b"]
+            ) - self.spot_ij
+
+        # Record the shift vector after we force_affine.
+        sv2 = self.spot_ij + shift_vectors
+
+        # Plot the above if desired.
+        if plot:
+            mask = analysis.take(
+                img,
+                self.spot_ij,
+                self.spot_integration_width_ij,
+                centered=True,
+                integrate=False,
+                return_mask=True,
+            )
+
+            plt.figure(figsize=(12, 12))
+            plt.imshow(img * mask)
+            plt.scatter(sv1[0, :], sv1[1, :], s=200, fc="none", ec="r")
+            plt.scatter(sv2[0, :], sv2[1, :], s=300, fc="none", ec="b")
+            plt.show()
+
+        # Handle the feedback applied from this refinement.
+        if basis is not None:
+            if basis == "kxy" or basis == "knm":
+                # Modify k-space targets. Don't modify any camera spots.
+                self.spot_kxy = self.spot_kxy - (
+                    self.cameraslm.ijcam_to_kxyslm(shift_vectors)
+                    - self.cameraslm.ijcam_to_kxyslm((0, 0))
+                )
+                self.spot_knm = toolbox.convert_vector(
+                    self.spot_kxy,
+                    to_units="kxy",
+                    from_units="knm",
+                    hardware=self.cameraslm.slm,
+                    shape=self.shape,
+                )
+                self.set_target(reset_weights=True)
+            elif basis == "ij":
+                # Modify camera targets. Don't modify any k-vectors.
+                self.spot_ij = self.spot_ij + shift_vectors
+            else:
+                raise Exception("Unrecognized basis '{}'.".format(basis))
+
+        return shift_vectors
