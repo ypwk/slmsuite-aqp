@@ -5,6 +5,7 @@ from .camera import Camera
 try:
     import PySpin
 except ImportError:
+    PySpin = None
     warnings.warn("PySpin not installed. Install to use FLIR cameras.")
 
 
@@ -40,6 +41,9 @@ class FLIR(Camera):
         **kwargs
             See :meth:`.Camera.__init__` for permissible options.
         """
+        if PySpin is None:
+            raise ImportError("PySpin not installed. Install to use FLIR cameras.")
+
         if FLIR.sdk is None:
             if verbose:
                 print("PySpin initializing... ", end="")
@@ -63,8 +67,6 @@ class FLIR(Camera):
         else:
             self.cam = camera_list.GetBySerial(serial)
         self.cam.Init()
-        if verbose:
-            print("success")
 
         # Initialize the base Camera class with sensor dimensions and bitdepth.
         super().__init__(

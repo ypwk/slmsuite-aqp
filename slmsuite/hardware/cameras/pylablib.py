@@ -1,8 +1,8 @@
 """
-Light wrapper for the :mod:`instrumental-lib` package.
-The :mod:`instrumental` module must be
-`installed <https://instrumental-lib.readthedocs.io/en/stable/install.html>`_.
-``pip install instrumental-lib``.
+Light wrapper for the :mod:`pylablib` package.
+See the supported `cameras
+<https://pylablib.readthedocs.io/en/stable/devices/cameras_root.html>`_.
+:mod:`pylablib` must be installed ``pip install pylablib``.
 
 Note
 ~~~~
@@ -12,21 +12,18 @@ import warnings
 from slmsuite.hardware.cameras.camera import Camera
 
 try:
-    import instrumental.drivers.cameras as instrumental_cameras
-    from instrumental.drivers import ParamSet
-    from instrumental import instrument, list_instruments
-except ImportError:
-    instrument = None
-    warnings.warn("instrumental-lib not installed. Install to use Instrumental cameras.")
+    from pylablib.devices.interface.camera import ICamera
+except:
+    ICamera = None
+    warnings.warn("pylablib not installed. Install to use PyLabLib cameras.")
 
-
-class Instrumental(Camera):
+class PyLabLib(Camera):
     """
     A wrapped :mod:`instrumental` camera.
 
     Attributes
     ----------
-    cam : instrumental.drivers.cameras.Camera
+    cam : pylablib.devices.interface.camera.ICamera
         Object to talk with the desired camera.
     exposure_s : float
         Instrumental doesn't save exposure. It sets the exposure at each
@@ -42,12 +39,9 @@ class Instrumental(Camera):
 
         Parameters
         ----------
-        cam : instrumental.drivers.cameras.Camera OR instrumental.drivers.ParamSet OR None
-            This class is just a wrapper for :mod:`instrumental`, so the user must pass a
-            constructed :mod:`instrumental` camera or equivalent.
-            If a ``ParamSet`` is provided, the camera is constructed.
-            If ``None``, the first instrument in ``instrumental.list_instruments()`` is used,
-            with errors or warnings if there are many or no instruments available.
+        cam : pylablib.devices.interface.camera.Camera
+            This class is just a wrapper for :mod:`pylablib`, so the user must pass a
+            constructed :mod:`pylablib` camera.
         pitch_um : (float, float) OR None
             Fill in extra information about the pixel pitch in ``(dx_um, dy_um)`` form
             to use additional calibrations.
@@ -61,35 +55,40 @@ class Instrumental(Camera):
         RuntimeError
            If the camera can not be reached.
         """
-        if instrument is None:
-            raise ImportError("instrumental-lib not installed. Install to use Instrumental cameras.")
+        if ICamera is None:
+            raise ImportError("pylablib not installed. Install to use PyLabLib cameras.")
 
-        if cam is None:
-            instruments = list_instruments()
-
-            if len(instruments) == 0:
-                raise RuntimeError("No instrumental cameras detected.")
-            else:
-                if len(instruments) > 1:
-                    warnings.warn(f"Multiple instruments detected; using first of {instruments}")
-                cam = list_instruments()[0]
-
-        if isinstance(cam, ParamSet):
-            cam = instrument(cam, reopen_policy="reuse")
-
-        if not isinstance(cam, instrumental_cameras.Camera):
+        if not isinstance(cam, ICamera):
             raise ValueError(
-                "A subclass of instrumental.drivers.cameras.Camera must be passed as cam."
+                "A subclass of pylablib.devices.interface.camera.Camera must be passed as cam."
             )
+        # info = cam.get_full_info()
+        # if verbose: print(info)
 
-        name = kwargs.pop("name", cam.model.decode("utf-8") + "_" + cam.serial.decode("utf-8"))
+        # Create a name for the camera, defaulting to kwargs.
+        name = ""
+        di = cam.get_device_info()
+        info_counter = 1
+        for info in di:
+            if isinstance(info, str):
+                name += info + "_"
+                info_counter += 1
+
+            if info_counter > 3:
+                break
+        name = name.strip("_")
+        if len(name) == 0:
+            name = "pylablibcamera"
+        name = kwargs.pop("name", name) # info["device_info"].model + "_" + info["device_info"].serial_number)
+
         if verbose: print(f"Cam {name} parsing... ", end="")
+        height, width = cam.get_data_dimensions()
         self.cam = cam
 
         super().__init__(
-            (self.cam.width, self.cam.height),
-            bitdepth=8,         # Currently defaults to 8 because instrumental doesn't cache this. Update in the future, maybe.
-            pitch_um=pitch_um,  # Currently unset because instrumental doesn't cache this. Update in the future, maybe.
+            (width, height),
+            bitdepth=8,         # Currently defaults to 8 because pylablib doesn't cache this. Update in the future, maybe.
+            pitch_um=pitch_um,  # Currently unset because pylablib doesn't cache this. Update in the future, maybe.
             name=name,
             **kwargs
         )
@@ -115,17 +114,17 @@ class Instrumental(Camera):
             An empty list.
         """
         raise RuntimeError(
-            ".info() is not applicable to instrumental cameras, which must be "
+            ".info() is not applicable to pylablib cameras, which must be "
             "constructed outside this wrapper."
         )
 
     def _get_exposure_hw(self):
         """See :meth:`.Camera._get_exposure_hw`."""
-        return float(self.cam.exposure._magnitude) / 1000
+        return self.cam.get_exposure()
 
     def _set_exposure_hw(self, exposure_s):
         """See :meth:`.Camera._set_exposure_hw`."""
-        self.cam.exposure = 1000. * float(exposure_s)
+        self.cam.set_exposure(float(exposure_s))
 
     def set_woi(self, woi=None):
         """
@@ -152,11 +151,15 @@ class Instrumental(Camera):
         Parameters
         ----------
         timeout_s : float
-            The time in seconds to wait for the frame to be fetched.
+            The time in seconds to wait for the frame to be fetched (currently unused).
 
         Returns
         -------
         numpy.ndarray
             Array of shape :attr:`~slmsuite.hardware.cameras.camera.Camera.shape`.
         """
-        return self.cam.grab_image(timeout=str(timeout_s) + "s", copy=True)
+        return self.cam.snap(timeout=timeout_s)
+
+    def _get_images_hw(self, image_count, timeout_s, out=None):
+        """See :meth:`.Camera._get_images_hw`."""
+        return self.cam.grab(nframes=image_count, frame_timeout=timeout_s)

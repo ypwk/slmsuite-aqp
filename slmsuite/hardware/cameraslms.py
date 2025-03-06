@@ -4,7 +4,6 @@ Datastructures, methods, and calibrations for an SLM monitored by a camera.
 
 import os
 import time
-import datetime
 import cv2
 import copy
 import matplotlib.pyplot as plt
@@ -14,12 +13,13 @@ from tqdm.auto import tqdm
 import warnings
 
 from slmsuite import __version__
+from slmsuite.hardware import _Picklable
 from slmsuite.holography import analysis
 from slmsuite.holography import toolbox
 from slmsuite.holography.algorithms import Hologram, SpotHologram, CompressedSpotHologram
 from slmsuite.holography.toolbox import imprint, format_2vectors, format_vectors, smallest_distance, fit_3pt, convert_vector
-from slmsuite.holography.toolbox.phase import blaze, _zernike_indices_parse, zernike, binary
-from slmsuite.holography.analysis.files import read_h5, write_h5, generate_path, latest_path
+from slmsuite.holography.toolbox.phase import blaze, _zernike_indices_parse, zernike, zernike_sum, binary
+from slmsuite.holography.analysis.files import load_h5, save_h5, generate_path, latest_path
 from slmsuite.holography.analysis.fitfunctions import cos, _sinc2d_nomod
 from slmsuite.holography.analysis.fitfunctions import _sinc2d_centered_taylor as sinc2d_centered
 from slmsuite.misc.math import REAL_TYPES
@@ -27,7 +27,7 @@ from slmsuite.misc.math import REAL_TYPES
 from slmsuite.hardware.cameras.simulated import SimulatedCamera
 from slmsuite.hardware.slms.simulated import SimulatedSLM
 
-class CameraSLM:
+class CameraSLM(_Picklable):
     """
     Base class for an SLM with camera feedback.
 
@@ -40,6 +40,8 @@ class CameraSLM:
     slm : ~slmsuite.hardware.slms.slm.SLM
         Instance of :class:`~slmsuite.hardware.slms.slm.SLM`
         which interfaces with a phase display.
+    name : str
+        Stores ``cam.name + '-' + slm.name``.
     mag : float
         Magnification of the camera relative to an experiment plane. For instance,
         ``mag = 10`` could refer to the use of a 10x objective (with appropriate
@@ -47,6 +49,8 @@ class CameraSLM:
         In this case, the images apparent on the camera are 10x larger than the true
         objects at the experiment plane.
     """
+    _pickle = ["name", "cam", "slm", "mag"]
+    _pickle_data = []
 
     def __init__(self, cam, slm, mag=1):
         """
@@ -81,6 +85,8 @@ class CameraSLM:
         if not hasattr(slm, "set_phase"):
             raise ValueError(f"Expected SLM to be passed as slm. Found {type(slm)}")
         self.slm = slm
+
+        self.name = self.cam.name + "-" + self.slm.name
 
         self.mag = float(mag)
 
@@ -218,6 +224,8 @@ class FourierSLM(CameraSLM):
             acquire data after a pattern is displayed. This is, of course, a tradeoff
             between measurement speed and measurement precision.
     """
+    _pickle = ["name", "cam", "slm", "mag"]
+    _pickle_data = ["calibrations"]
 
     def __init__(self, *args, **kwargs):
         r"""See :meth:`CameraSLM.__init__`."""
@@ -282,7 +290,7 @@ class FourierSLM(CameraSLM):
 
     def name_calibration(self, calibration_type):
         """
-        Creates ``"{cam.name}-{slm.name}-{calibration_type}-calibration"``.
+        Creates ``"{self.name}-{calibration_type}-calibration"``.
 
         Parameters
         ----------
@@ -295,9 +303,17 @@ class FourierSLM(CameraSLM):
         name : str
             The generated name.
         """
-        return f"{self.cam.name}-{self.slm.name}-{calibration_type}-calibration"
+        return f"{self.name}-{calibration_type}-calibration"
 
-    def write_calibration(self, calibration_type, path=".", name=None):
+    def write_calibration(self, calibration_type, path, name):
+        "Backwards-compatibility alias for :meth:`save_calibration()`."
+        warnings.warn(
+            "The backwards-compatible alias FourierSLM.write_calibration will be depreciated "
+            "in favor of FourierSLM.save_calibration in a future release."
+        )
+        self.save_calibration(calibration_type, path, name)
+
+    def save_calibration(self, calibration_type, path=".", name=None):
         """
         to a file like ``"path/name_id.h5"``.
 
@@ -325,11 +341,19 @@ class FourierSLM(CameraSLM):
         if name is None:
             name = self.name_calibration(calibration_type)
         file_path = generate_path(path, name, extension="h5")
-        write_h5(file_path, self.calibrations[calibration_type])
+        save_h5(file_path, self.calibrations[calibration_type])
 
         return file_path
 
     def read_calibration(self, calibration_type, file_path=None):
+        "Backwards-compatibility alias for :meth:`load_calibration()`."
+        warnings.warn(
+            "The backwards-compatible alias FourierSLM.read_calibration will be depreciated "
+            "in favor of FourierSLM.load_calibration in a future release."
+        )
+        self.load_calibration(calibration_type, file_path)
+
+    def load_calibration(self, calibration_type, file_path=None):
         """
         from a file.
 
@@ -357,27 +381,26 @@ class FourierSLM(CameraSLM):
             path = os.path.abspath(".")
             name = self.name_calibration(calibration_type)
             file_path = latest_path(path, name, extension="h5")
+
             if file_path is None:
                 raise FileNotFoundError(
                     "Unable to find a calibration file like\n{}"
                     "".format(os.path.join(path, name))
                 )
 
-        self.calibrations[calibration_type] = read_h5(file_path)
+        self.calibrations[calibration_type] = cal = load_h5(file_path)
+        cal_ver = "an unknown version" if not "__version__" in cal else cal["__version__"]
+
+        if cal_ver != __version__:
+            warnings.warn(
+                f"You are using slmsuite {__version__}, but the calibration "
+                f"in '{file_path}' was created in {cal_ver}."
+            )
 
         return file_path
 
     def _get_calibration_metadata(self):
-        t = datetime.datetime.now()
-        return {
-            "__version__" : __version__,
-            "__time__" : str(t),
-            "__timestamp__" : t.timestamp(),
-            "__meta__" : {
-                "camera" : self.cam.name,   # Future: pickle hardware.
-                "slm" : self.slm.name
-            }
-        }
+        return self.pickle(attributes=False, metadata=True)      # Pickle without heavy data.
 
     ### Settle Time Calibration ###
 
@@ -901,7 +924,8 @@ class FourierSLM(CameraSLM):
             and the dictionary is passed to
             :meth:`~slmsuite.hardware.cameras.camera.Camera.autoexposure()`.
         **kwargs : dict
-            Passed to :meth:`.fourier_grid_project()`.
+            Passed to :meth:`.fourier_grid_project()`, which passes them to
+            :meth:`~slmsuite.holography.algorithms.SpotHologram.optimize()`.
 
         Returns
         -------
@@ -917,9 +941,17 @@ class FourierSLM(CameraSLM):
             raise ValueError("array_pitch must be positive.")
 
         # Make and project a GS hologram across a normal grid of kvecs
-        hologram = self.fourier_grid_project(
-            array_shape=array_shape, array_pitch=array_pitch, array_center=array_center, **kwargs
-        )
+        try:
+            hologram = self.fourier_grid_project(
+                array_shape=array_shape, array_pitch=array_pitch, array_center=array_center, **kwargs
+            )
+        except Exception as e:
+            warnings.warn(
+                "fourier_calibrate failed during array holography. Try the following:\n"
+                "- Reducing the array_pitch or array_shape,\n"
+                "- Checking SLM parameters."
+            )
+            raise e
 
         # The rounding of the values might cause the center to shift from the desired
         # value. To compensate for this, we find the true written center.
@@ -953,11 +985,14 @@ class FourierSLM(CameraSLM):
             else:
                 self.cam.autoexposure()
 
-        # self.cam.flush()
         img = self.cam.get_image()
 
         # Get orientation of projected array
-        orientation = analysis.blob_array_detect(img, array_shape, plot=plot)
+        try:
+            orientation = analysis.blob_array_detect(img, array_shape, plot=plot)
+        except Exception as e:
+            warnings.warn("fourier_calibrate failed during array detection and fitting.")
+            raise e
 
         a = format_2vectors(array_center)
         M = np.array(orientation["M"])
@@ -1028,7 +1063,7 @@ class FourierSLM(CameraSLM):
             if array_center is None
             else (
                 format_2vectors(array_center) +
-                format_2vectors(((shape[1]) / 2.0, (shape[0]) / 2.0))
+                format_2vectors((shape[1] / 2.0, shape[0] / 2.0))
             ),
             basis="knm",
             orientation_check=True,
@@ -1290,7 +1325,7 @@ class FourierSLM(CameraSLM):
         elif basis == "ij":
             M = self.calibrations["fourier"]["M"]
             # Compensate for spot rotation s.t. spot size is along camera axes
-            size_kxy = np.linalg.inv(M / np.sqrt(np.linalg.det(M))) @ np.array(
+            size_kxy = np.linalg.inv(M / np.sqrt(np.abs(np.linalg.det(M)))) @ np.array(
                 (1 / slm_size[0], 1 / slm_size[1])
             )
             return np.abs(self.kxyslm_to_ijcam([0, 0]) - self.kxyslm_to_ijcam(size_kxy))
@@ -1380,7 +1415,7 @@ class FourierSLM(CameraSLM):
         self,
         calibration_points=None,
         zernike_indices=9,
-        perturbation=None,
+        perturbation=1,
         callback=None,
         metric=None,
         optimize_focus=True,
@@ -1394,6 +1429,8 @@ class FourierSLM(CameraSLM):
         ----------
         calibration_points : (float, float) OR numpy.ndarray OR float OR None
             Position(s) in the camera domain where interference occurs.
+            A passed array should be a standard ``(D, N)`` matrix,
+            where ``D`` is the dimension of the Zernike space and ``N`` is the number of points.
             If ``int``, fills the camera field of view with roughly this number of calibration
             points.
             If ``None``, defaults to 100 points, unless a calibration is already saved
@@ -1435,13 +1472,14 @@ class FourierSLM(CameraSLM):
             Perturbation in radians to iteratively multiply with each of the
             :math:`\pm 1`-normalized Zernike terms.
             If ``float``, tests 11 points in a range of plus to minus this value in radians.
-            If ``None``, uses a range of :math:`\pm 1` radians.
-            If ``0``, the starting spots are projected and the function returns before optimizing.
+            Defaults to a range of :math:`\pm 1` radians.
+            If ``0`` or ``None``, the starting spots are projected and the function returns before optimizing.
         callback : None OR function
             Measure the system to determine the level of aberration. Expected to return
             a list of floats of length ``N`` corresponding to the chosen metric evaluated
-            on all the spots. This data is fit using a parabola, and the x-offset of the
-            parabola is interpreted as the minimum aberration
+            on all the spots. The optimizer will *minimize* the figure of merit.
+            This data is fit using a parabola, and the x-offset of the
+            parabola is interpreted as the minimum aberration.
         metric : None OR function
             If ``callback`` is ``None``, then the camera is used to measure the system.
             This parameter allows the user to impart a custom figure of merit upon the
@@ -1452,7 +1490,7 @@ class FourierSLM(CameraSLM):
             If ``None``, :meth:`._wavefront_calibrate_zernike_default_metric()`
             is used, which is just a wrapper for
             :meth:`~slmsuite.holography.analysis.image_areas()`, a measurement of spot
-            size.
+            size. The optimizer will *minimize* the figure of merit.
         optimize_focus : bool
             If ``False``, does not optimize the focus term (ansi index 4). Useful in
             cases where the ``callback`` method is insensitive to :meth:`z`-translation
@@ -1480,15 +1518,15 @@ class FourierSLM(CameraSLM):
             If various points are out of range.
         """
         # Helper function to sweep the amplitude of a Zernike over a pattern.
-        def sweep_term(sweep, term, pattern, callback):
+        def sweep_term(sweep, term, pattern, callback, desc=None):
             result = None
             sweep = np.ravel(sweep)
             N = len(sweep)
             M = None
 
-            iterable = enumerate(sweep)
+            iterable = list(enumerate(sweep))
             if plot >= 0:
-                iterable = tqdm(iterable)
+                iterable = tqdm(iterable, desc=desc, position=0, leave=True)
 
             for i, x in iterable:
                 phase = pattern + x * term
@@ -1532,7 +1570,11 @@ class FourierSLM(CameraSLM):
                         sweep,
                         result[:, i],
                         ftol=1e-5,
-                        p0=guess
+                        p0=guess,
+                        bounds=(
+                            [-np.inf, 0, -np.inf],
+                            [np.inf, np.inf, np.inf]
+                        )
                     )
                     perr = np.sqrt(np.diag(pcov))   # Single sigma error, which can be multiplied later.
                 except Exception as e:
@@ -1572,7 +1614,7 @@ class FourierSLM(CameraSLM):
                     linestyle='none'
                 )
                 plt.gca().set_aspect("auto")
-                plt.title(f"Zernike $Z_{term}$")
+                plt.title("Zernike $Z_{" + str(term) + "}$")
                 plt.xlabel("Calibration Point [#]")
                 plt.ylabel("Perturbation [rad]")
                 plt.xlim(-.5, result.shape[1]-.5)
@@ -1600,24 +1642,27 @@ class FourierSLM(CameraSLM):
         if dp:  # Pad with zeros if the points don't have certain terms.
             calibration_points = np.pad(calibration_points, ((0,dp), (0,0)))
 
+        initial_points = calibration_points.copy()
+
         # Get the ij coordinates
         if not (1 in zernike_indices and 2 in zernike_indices):
             raise ValueError("x and y terms are expected for the calibration_points.")
         zernike_basis_cartesian = [
             np.argwhere(zernike_indices == 2)[0], np.argwhere(zernike_indices == 1)[0]
         ]
-        calibration_points_ij = convert_vector(
-            calibration_points[zernike_basis_cartesian, :],
-            from_units="zernike",
-            to_units="ij",
-            hardware=self
-        )
-
-        max_window_size = smallest_distance(calibration_points_ij)
-        window_size = int(np.min((.25*max_window_size, 15)))
 
         # Parse callback.
         if callback is None:
+            calibration_points_ij = convert_vector(
+                calibration_points[zernike_basis_cartesian, :],
+                from_units="zernike",
+                to_units="ij",
+                hardware=self
+            )
+
+            max_window_size = smallest_distance(calibration_points_ij)
+            window_size = int(np.min((.25*max_window_size, 15)))
+
             def default_callback():
                 self.cam.flush()
                 img = self.cam.get_image()
@@ -1634,18 +1679,22 @@ class FourierSLM(CameraSLM):
             callback = default_callback
 
         # Build hologram
-        hologram = CompressedSpotHologram(
-            spot_vectors=calibration_points,
-            basis=zernike_indices,
-            cameraslm=self
-        )
+        if calibration_points.shape[1] > 1:
+            hologram = CompressedSpotHologram(
+                spot_vectors=calibration_points,
+                basis=zernike_indices,
+                cameraslm=self
+            )
 
-        hologram.optimize("WGS-Kim", maxiter=30, verbose=0)
+            hologram.optimize("WGS-Kim", maxiter=30, verbose=0)
+        else:
+            hologram = None
 
         # Parse perturbation
         if perturbation is None:
-            perturbation = np.linspace(-1, 1, 11, endpoint=True)
-        elif np.isscalar(perturbation):
+            perturbation = 1
+
+        if np.isscalar(perturbation):
             if perturbation == 0:
                 self.slm.set_phase(hologram.get_phase(), settle=True, phase_correct=False)
 
@@ -1670,20 +1719,53 @@ class FourierSLM(CameraSLM):
             perturbation = np.ravel(perturbation)
 
         # Calibration loop.
+        result = None
         for j, i in enumerate(zernike_indices):
             # Ignore the piston and tilt terms, maybe also the focus too.
             if i in [0, 2, 1] or (i == 4 and not optimize_focus):
                 continue
 
-            # Reoptimize the hologram at each step.
-            hologram.optimize("WGS-Kim", maxiter=10, verbose=0)
+            if hologram is None:
+                pattern = zernike_sum(
+                    self.slm,
+                    zernike_indices,
+                    calibration_points,
+                    use_mask=False
+                )
+            else:
+                # Reoptimize the hologram at each step.
+                hologram.spot_zernike = calibration_points
+
+                # Hack to subtract the previous order without having to regenerate the basis.
+                # if hasattr(hologram, "_cupy_kernel"):
+                #     if len(correction) == hologram._cupy_kernel.shape[0]:
+                #         # Convert the update into the proper format.
+                #         if hasattr(hologram._cupy_kernel, "get_array_module"):
+                #             cp = hologram._cupy_kernel.get_array_module()
+                #             term = cp.array(term, dtype=hologram.dtype_complex)
+                #             term *= hologram.dtype_complex(1j)
+                #             term = cp.exp(term, out=term)
+                #         else:
+                #             term = np.array(term, dtype=hologram.dtype_complex)
+                #             term *= hologram.dtype_complex(1j)
+                #             term = np.exp(term, out=term)
+
+                #         # exp is applied mulitiplicatively.
+                #         for k in range(len(correction)):
+                #             hologram._cupy_kernel[k,:] *= correction[k] * term.ravel()
+
+                #         # Tell the cache that it's been updated.
+                #         hologram._spot_zernike_cached = np.copy(hologram.spot_zernike)
+
+                hologram.optimize("WGS-Kim", maxiter=10, verbose=0)
+                pattern = hologram.get_phase()
 
             # Determine which Zernike polynomial we are testing.
             term = zernike(self.slm, i, use_mask=False)
 
             # Test the polynomial. This returns a (N, S) array,
             # where N is the number of spots and S is the number of sweep points.
-            result = sweep_term(perturbation, term, hologram.get_phase(), callback)
+            result = sweep_term(perturbation, term, pattern, callback, f"Z_{i}")
 
             # Analyze the results by fitting each to a parabola.
             correction, correction_error, railed = fit_term(perturbation, result, i, calibration_points[j, :])
@@ -1691,36 +1773,15 @@ class FourierSLM(CameraSLM):
             # Apply the correction to the spots.
             calibration_points[j, :] += correction
 
-            # Update the hologram.
-            hologram.spot_zernike = calibration_points
-
-            # Hack to subtract the previous order without having to regenerate the basis.
-            # if hasattr(hologram, "_cupy_kernel"):
-            #     if len(correction) == hologram._cupy_kernel.shape[0]:
-            #         # Convert the update into the proper format.
-            #         if hasattr(hologram._cupy_kernel, "get_array_module"):
-            #             cp = hologram._cupy_kernel.get_array_module()
-            #             term = cp.array(term, dtype=hologram.dtype_complex)
-            #             term *= hologram.dtype_complex(1j)
-            #             term = cp.exp(term, out=term)
-            #         else:
-            #             term = np.array(term, dtype=hologram.dtype_complex)
-            #             term *= hologram.dtype_complex(1j)
-            #             term = np.exp(term, out=term)
-
-            #         # exp is applied mulitiplicatively.
-            #         for k in range(len(correction)):
-            #             hologram._cupy_kernel[k,:] *= correction[k] * term.ravel()
-
-            #         # Tell the cache that it's been updated.
-            #         hologram._spot_zernike_cached = np.copy(hologram.spot_zernike)
-
         del hologram
 
         self.calibrations["wavefront_zernike"] = {
+            "initial_points": initial_points,
             "zernike_indices": zernike_indices,
             "corrected_spots": calibration_points,
-            "calibration_points_ij" : calibration_points_ij
+            "last_result": result
+            # "calibration_points_ij" : calibration_points_ij
+            # FUTURE: FoM records
         }
         self.calibrations["wavefront_zernike"].update(self._get_calibration_metadata())
 
@@ -1747,8 +1808,6 @@ class FourierSLM(CameraSLM):
         cbar.ax.set_ylabel("Aberration Correction [rad]") #, rotation=270)
         plt.clim(-lim, lim)
         plt.title(f"Zernike $Z_{zernike_indices[index]}$")
-
-
 
     @staticmethod
     def _wavefront_calibrate_zernike_default_metric(images):
@@ -1967,6 +2026,7 @@ class FourierSLM(CameraSLM):
                 plot=plot
             )
 
+        # TODO: warn if matrix is transposed.
         calibration_points = np.rint(format_2vectors(calibration_points)).astype(int)
         num_points = calibration_points.shape[1]
 
@@ -2096,11 +2156,15 @@ class FourierSLM(CameraSLM):
         if num_points > 1:
             calibration_distance = smallest_distance(calibration_points, "euclidean")
             if np.max(interference_window) > calibration_distance:
-                raise ValueError(
+                message = (
                     "Requested calibration points are too close together. "
-                    "The minimum distance {} pix is smaller than twice the window size {} pix."
-                    .format(calibration_distance, 2 * interference_window)
+                    "The minimum distance {} pix is smaller than the window size {} pix."
+                    .format(calibration_distance, interference_window)
                 )
+                if test_index is None:
+                    raise ValueError(message)
+                else:
+                    warnings.warn(message)
 
         # Error check interference point proximity to the 0th order.
         dorder = field_point - base_point
@@ -3199,7 +3263,6 @@ class FourierSLM(CameraSLM):
             size_blur = 4 * int(superpixel_size) + 1
             pwr_large = cv2.GaussianBlur(pwr_large, (size_blur, size_blur), 0)
 
-        amp = np.sqrt(pwr_norm)
         amp_large = np.sqrt(pwr_large)
         amp_large /= np.nanmax(amp_large)
 

@@ -172,6 +172,11 @@ def latest_path(path, name, extension=None, kind="file", digit_count=5):
 
 
 def read_h5(file_path, decode_bytes=True):
+    """Backwards-compatible alias of :meth:`load_h5`"""
+    return load_h5(file_path, decode_bytes)
+
+
+def load_h5(file_path, decode_bytes=True):
     """
     Read data from an h5 file into a dictionary.
     In the case of more complicated h5 hierarchy, a dictionary of dictionaries is returned.
@@ -216,6 +221,11 @@ def read_h5(file_path, decode_bytes=True):
 
 
 def write_h5(file_path, data, mode="w"):
+    """Backwards-compatible alias of :meth:`save_h5`"""
+    return save_h5(file_path, data, mode)
+
+
+def save_h5(file_path, data, mode="w"):
     """
     Write data in a dictionary to an `h5 file
     <https://docs.h5py.org/en/stable/high/file.html#opening-creating-files>`_.
@@ -223,7 +233,7 @@ def write_h5(file_path, data, mode="w"):
     Note
     ~~~~
     There are some limitations to what the h5 file standard can store, along with
-    limitations on what is currently implemented in this function. A few tips:
+    limitations on what is currently implemented in this function.
 
     Supported types:
 
@@ -259,7 +269,7 @@ def write_h5(file_path, data, mode="w"):
                     array = np.array(data[key])
                 except ValueError as e:
                     raise ValueError(
-                        "write_h5() does not support saving staggered arrays such as {}. "
+                        "save_h5() does not support saving staggered arrays such as {}. "
                         "Arrays must be uniform. {}".format(str(data[key]), str(e))
                     )
                 except Exception as e:
@@ -274,7 +284,7 @@ def write_h5(file_path, data, mode="w"):
         recurse(file_, data)
 
 
-def _read_image(path, shape, target_shape=None, angle=0, shift=(-225, -170)):
+def _load_image(path, shape, target_shape=None, angle=0, shift=(-225, -170)):
     """Helper function for examples."""
     # Load the image.
     img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
@@ -302,11 +312,96 @@ def _read_image(path, shape, target_shape=None, angle=0, shift=(-225, -170)):
 
     return target_ij
 
-def write_image(file_path, images, cmap=False, lut=None, normalize=True, border=None, **kwargs):
+
+def _gray2rgb(images, cmap=False, lut=None, normalize=True, border=None):
     """
-    Save an image or stacks of images as a filetype supported by :mod:`imageio`.
+    Currently-hidden function to convert a stack of
+    grayscale images to color with a colormap.
+
+    Returns
+    -------
+    numpy.ndarray
+        The converted images. This is of size ``(image_count, h, w, 4)``,
+        where the last axis is RGBA color.
+    """
+    # Parse images.
+    images = np.array(images, copy=(False if np.__version__[0] == '1' else None))
+    if len(images.shape) == 2:
+        images = np.reshape(images, (1, images.shape[0], images.shape[1]))
+    elif len(images.shape) >= 3 and images.shape[-1] == 3:  # Already RGB
+        return images
+    elif len(images.shape) > 3:
+        raise RuntimeError(f"Images shape {images.shape} could not be parsed.")
+
+    isfloat = np.issubdtype(images.dtype, np.floating)
+
+    # Parse cmap.
+    if cmap == "default":
+        cmap = True
+    if cmap == "grayscale":
+        cmap = False
+
+    if not isinstance(cmap, str):
+        if cmap is True:
+            cmap = mpl.rcParams['image.cmap']
+        else:
+            # Grayscale is forced to have an lut smaller than 256.
+            if lut is None or lut > 256:
+                lut = 256
+
+    # Parse lut.
+    if lut is None:
+        if isfloat:
+            lut = mpl.rcParams['image.lut']-1
+        else:
+            lut = np.nanmax(images)
+    # lut = np.clip(lut, 0, np.max(images))
+    lut = np.array([lut]).astype(images.dtype)[0]
+
+    # Check for nan.
+    nanmask = np.isnan(images)
+    hasnan = np.any(nanmask)
+    if hasnan:
+        images[nanmask] = 0
+
+    # Convert images to integers scaled to the lut size.
+    if normalize:
+        images = np.rint(images * ((float(lut)+1) / np.max(images))).astype(int)
+        images = np.clip(images, 0, int(lut))
+    elif isfloat:
+        images = np.rint(images * (float(lut)+1)).astype(int)
+        images = np.clip(images, 0, int(lut))
+
+    # Convert images to RGB.
+    if isinstance(cmap, str):
+        cm = plt.get_cmap(cmap, int(lut)+1)
+        if hasattr(cm, "colors"):
+            c = cm.colors
+        else:
+            c = cm(np.arange(0, cm.N))
+        images = 255 * c[images]
+        if hasnan:
+            images[nanmask, 3] = 0
+
+    images = images.astype(np.uint8)
+
+    # Add a border if desired.
+    if border is not None:
+        images[:,  0, :, :len(border)] = border
+        images[:, -1, :, :len(border)] = border
+        images[:, :,  0, :len(border)] = border
+        images[:, :, -1, :len(border)] = border
+
+    return images
+
+
+def save_image(file_path, images, cmap=False, lut=None, normalize=True, border=None, **kwargs):
+    """
+    Save a grayscale image or stacks of grayscale images
+    as a filetype supported by :mod:`imageio`.
     Handles :mod:`matplotlib` colormapping.
     Negative values are truncated to zero.
+    ``np.nan`` values are set to transparent.
 
     Parameters
     ----------
@@ -314,6 +409,7 @@ def write_image(file_path, images, cmap=False, lut=None, normalize=True, border=
         Full path to the file to save the data in.
     images : numpy.ndarray
         A 2D matrix (image formats) or stack of 2D matrices (video formats).
+
     cmap : str OR bool OR None
         If ``str``, the :mod:`matplotlib` colormap under this name is used.
         If ``None`` or ``False``, the images are directly saved as grayscale 8-bit images.
@@ -331,61 +427,8 @@ def write_image(file_path, images, cmap=False, lut=None, normalize=True, border=
         this is scaled to the ``lut``.
     **kwargs
         Passed to ``imageio.imsave()`` or ``imageio.mimsave()``. Useful for choosing a ``plugin`` or ``format``.
-
-    Returns
-    -------
-    numpy.ndarray
-        The moment :math:`M_{m_xm_y}` evaluated for every image. This is of size ``(image_count,)``
-        for provided ``images`` data of shape ``(image_count, h, w)``.
     """
-    # Parse images.
-    images = np.array(images, copy=(False if np.__version__[0] == '1' else None))
-    if len(images.shape) == 2:
-        images = np.reshape(images, (1, images.shape[0], images.shape[1]))
-    # (img_count, w_y, w_x) = images.shape
-    isfloat = np.issubdtype(images.dtype, np.floating)
-
-    # Parse cmap.
-    if not isinstance(cmap, str):
-        if cmap is True:
-            cmap = mpl.rcParams['image.cmap']
-        else:
-            if lut is None or lut > 256:
-                lut = 256
-
-    # Parse lut.
-    if lut is None:
-        if isfloat:
-            lut = mpl.rcParams['image.lut']
-        else:
-            lut = np.max(images)+1
-    lut = int(lut)
-
-    if normalize:
-        images = np.rint(images * (float(lut-1) / np.max(images))).astype(int)
-    elif isfloat:
-        images = np.rint(images * float(lut-1)).astype(int)
-
-    images[images < 0] = 0
-    images[images > lut] = lut
-
-    # Convert images.
-    if isinstance(cmap, str):
-        cm = plt.get_cmap(cmap, lut)
-        if hasattr(cm, "colors"):
-            c = cm.colors
-        else:
-            c = cm(np.arange(0, cm.N))
-        images = c[images]
-        images = 255 * images[:, :, :, :3]  # Remove alpha channel
-
-    images = images.astype(np.uint8)
-
-    if border is not None:
-        images[:, 0, :, :] = border
-        images[:, -1, :, :] = border
-        images[:, :, 0, :] = border
-        images[:, :, -1, :] = border
+    images = _gray2rgb(images, cmap=cmap, lut=lut, normalize=normalize, border=border)
 
     # Determine the file format
     extension = file_path.split(".")[-1]
@@ -394,7 +437,7 @@ def write_image(file_path, images, cmap=False, lut=None, normalize=True, border=
     try:
         from imageio import mimsave, imsave
     except:
-        raise ValueError("imageio is required for write_image().")
+        raise ValueError("imageio is required for save_image().")
 
     if images.shape[0] == 1:
         imsave(file_path, images[0], **kwargs)

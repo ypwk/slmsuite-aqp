@@ -11,8 +11,7 @@ spatial light modulator (SLM) control and holography.
    <https://slmsuite.readthedocs.io/en/latest/_examples/zernike_holography.html>`_
    aberration correction; capable of optimizing spot imaging
    `across a field of view
-   <https://slmsuite.readthedocs.io/en/latest/_examples/multipoint_calibration.html>`_
-   [#note]_.
+   <https://slmsuite.readthedocs.io/en/latest/_examples/multipoint_calibration.html>`_.
 
    .. image:: https://raw.githubusercontent.com/slmsuite/slmsuite-examples/main/examples/ex-zernike-spots-dark.gif
       :class: only-dark
@@ -63,7 +62,7 @@ spatial light modulator (SLM) control and holography.
 
    <p align="center">
    <a href="https://slmsuite.readthedocs.io/en/latest"><img alt="Documentation Status" src="https://readthedocs.org/projects/slmsuite/badge/?version=latest"></a>
-   <a href="https://pypi.org/project/slmsuite/"><img alt="PyPi Package" src="https://img.shields.io/badge/pypi-v0.1.1-3776AB.svg"></a>
+   <a href="https://pypi.org/project/slmsuite/"><img alt="PyPi Package" src="https://img.shields.io/badge/pypi-v0.2.1-3776AB.svg"></a>
    <a href="https://github.com/slmsuite/slmsuite/blob/main/LICENSE"><img alt="License: MIT" src="https://img.shields.io/github/license/slmsuite/slmsuite?color=purple"></a>
    <a href="https://github.com/psf/black"><img alt="Code style: black" src="https://img.shields.io/badge/code%20style-black-000000.svg"></a>
    </p>
@@ -88,12 +87,6 @@ or
    examples
    api
    tips
-
-.. rubric:: Note
-
-.. [#note] *Zernike spots are one of the main capabilities to be featured in the
-   pending* |slmsuite|_ *paper. If you have an interesting application
-   for Zernike spots, let us know!*
 
 .. |slmsuite| replace:: :mod:`slmsuite`
 .. _slmsuite: https://github.com/slmsuite/slmsuite
