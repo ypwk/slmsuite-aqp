@@ -47,6 +47,7 @@ from slmsuite.holography.algorithms._spots import (
 )
 from slmsuite.holography.algorithms._3dhologram import (
     SpotHologram3D as _SpotHologram3D,
+    # Compressed3DSpotHologram as _Compressed3DSpotHologram,
 )
 from slmsuite.holography.algorithms._multiplane import (
     MultiplaneHologram as _MultiplaneHologram,
@@ -74,6 +75,10 @@ class SpotHologram3D(_SpotHologram3D):
     pass
 
 
+# class Compressed3DSpotHologram(_Compressed3DSpotHologram):
+#     pass
+
+
 class MultiplaneHologram(_MultiplaneHologram):
     pass
 
@@ -84,4 +89,5 @@ FeedbackHologram.__doc__ = _FeedbackHologram.__doc__
 SpotHologram.__doc__ = _SpotHologram.__doc__
 CompressedSpotHologram.__doc__ = _CompressedSpotHologram.__doc__
 SpotHologram3D.__doc__ = _SpotHologram3D.__doc__
+# Compressed3DSpotHologram.__doc__ = _Compressed3DSpotHologram.__doc__
 MultiplaneHologram.__doc__ = _MultiplaneHologram.__doc__

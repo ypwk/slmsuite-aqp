@@ -1,13 +1,3 @@
-"""
-**(NotImplemented)** Hardware control for FLIR cameras via the :mod:`PySpin` interface to the Spinnaker SDK.
-Install Spinnaker by following the
-`provided instructions <https://www.flir.com/products/spinnaker-sdk/>`_.
-Inspired by `this implementation <https://github.com/klecknerlab/simple_pyspin/>`_.
-
-Warning
-~~~~~~~~
-Implementation unfinished and untested. Consider using ``simple_pyspin`` as a dependency instead.
-"""
 import warnings
 
 from .camera import Camera
@@ -53,14 +43,17 @@ class FLIR(Camera):
         if FLIR.sdk is None:
             if verbose:
                 print("PySpin initializing... ", end="")
-            FLIR.sdk = PySpin.System.get_instance()
+            FLIR.sdk = PySpin.System.GetInstance()
+
             if verbose:
                 print("success")
 
         if verbose:
             print("Looking for cameras... ", end="")
-        camera_list = PySpin.sdk.GetCameras()
+        # Note: using FLIR.sdk instead of PySpin.sdk
+        camera_list = FLIR.sdk.GetCameras()
         if verbose:
+            print(f"found {camera_list.GetSize()} cameras.")
             print("success")
 
         if verbose:
@@ -73,49 +66,115 @@ class FLIR(Camera):
         if verbose:
             print("success")
 
+        # Initialize the base Camera class with sensor dimensions and bitdepth.
         super().__init__(
             (self.cam.SensorWidth.get(), self.cam.SensorHeight.get()),
             bitdepth=int(self.cam.PixelSize.get()),
             pitch_um=pitch_um,
             name=serial,
-            **kwargs
+            **kwargs,
         )
 
-        raise NotImplementedError()
+        # Optionally disable auto exposure by setting the node (if available)
+        try:
+            self.cam.ExposureAuto.set(PySpin.ExposureAuto_Off)
+        except Exception as e:
+            warnings.warn("Could not disable auto exposure: " + str(e))
+
+        # Begin image acquisition so _get_image_hw works later.
+        self.cam.BeginAcquisition()
 
     def close(self, close_sdk=True):
-        """See :meth:`.Camera.close`."""
+        """Cleanly end acquisition and deinitialize the camera."""
         try:
             self.cam.EndAcquisition()
-        except BaseException:
-            pass
+        except Exception as e:
+            warnings.warn("Error ending acquisition: " + str(e))
+        self.cam.DeInit()
         del self.cam
+
+        if close_sdk and FLIR.sdk is not None:
+            FLIR.sdk.ReleaseInstance()
+            FLIR.sdk = None
 
     ### Property Configuration ###
 
     def get_exposure(self):
-        """See :meth:`.Camera.get_exposure`."""
-        return
+        """Get the current exposure time in seconds."""
+        # Assume the camera returns exposure in microseconds.
+        exposure_us = self.cam.ExposureTime.get()
+        return exposure_us / 1e6
 
     def set_exposure(self, exposure_s):
-        """See :meth:`.Camera.set_exposure`."""
-        return
+        """Set the camera exposure time in seconds."""
+        # Ensure auto exposure is off
+        self.cam.ExposureAuto.set(PySpin.ExposureAuto_Off)
+        exposure_us = exposure_s * 1e6
+
+        # Optionally check camera limits, if available.
+        try:
+            exposure_min = self.cam.ExposureTime.get_min()
+            exposure_max = self.cam.ExposureTime.get_max()
+            if exposure_us < exposure_min or exposure_us > exposure_max:
+                warnings.warn(
+                    f"Requested exposure {exposure_s}s is out of bounds "
+                    f"({exposure_min/1e6:.3f}s - {exposure_max/1e6:.3f}s). Clipping to valid range."
+                )
+                exposure_us = max(min(exposure_us, exposure_max), exposure_min)
+        except Exception:
+            # If limits are not available, proceed without checking.
+            pass
+
+        self.cam.ExposureTime.set(exposure_us)
 
     def set_woi(self, window=None):
-        """See :meth:`.Camera.set_woi`."""
-        return
+        """Set the window of interest (WOI) for the camera.
+
+        Parameters
+        ----------
+        window : tuple or None
+            Tuple in the form (x_offset, y_offset, width, height). If None, resets to full sensor.
+        """
+        sensor_width = self.cam.SensorWidth.get()
+        sensor_height = self.cam.SensorHeight.get()
+
+        if window is None:
+            window = (0, 0, sensor_width, sensor_height)
+        else:
+            if len(window) != 4:
+                raise ValueError(
+                    "Window must be a tuple of (x_offset, y_offset, width, height)."
+                )
+
+        x_offset, y_offset, width, height = window
+
+        # Check that the window is within sensor bounds.
+        if (
+            x_offset < 0
+            or y_offset < 0
+            or x_offset + width > sensor_width
+            or y_offset + height > sensor_height
+        ):
+            raise ValueError("Window dimensions are out of sensor bounds.")
+
+        self.cam.OffsetX.set(x_offset)
+        self.cam.OffsetY.set(y_offset)
+        self.cam.Width.set(width)
+        self.cam.Height.set(height)
 
     def _get_image_hw(self, blocking=True):
         """
-        See :meth:`.Camera._get_image_hw`.
+        Get an image from the camera hardware.
 
         Parameters
         ----------
         blocking : bool
             Whether to wait for the camera to return a frame, blocking other acquisition.
         """
-        frame = self.cam.GetNextImage(
+        timeout = (
             PySpin.EVENT_TIMEOUT_INFINITE if blocking else PySpin.EVENT_TIMEOUT_NONE
         )
-
-        return frame.GetNDArray()
+        frame = self.cam.GetNextImage(timeout)
+        image = frame.GetNDArray()
+        frame.Release()  # Always release the frame to free memory.
+        return image

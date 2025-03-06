@@ -1,4 +1,4 @@
-from slmsuite.holography.algorithms import SpotHologram3D
+from slmsuite.holography.algorithms import Compressed3DSpotHologram
 from wavefront import GaussianBeam
 import numpy as np
 
@@ -47,7 +47,7 @@ trap_pitch = calculate_trap_pitch(
 )
 
 # Instead of picking a few points, make a rectangular grid in the knm basis
-array_holo = SpotHologram3D.make_rectangular_array(
+array_holo = Compressed3DSpotHologram.make_rectangular_array(
     (params["grid_size"], params["grid_size"], params["grid_size"]),
     array_shape=(params["nx"], params["ny"], params["nz"]),
     array_pitch=(trap_pitch, trap_pitch, trap_pitch),
