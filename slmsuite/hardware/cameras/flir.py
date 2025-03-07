@@ -8,6 +8,9 @@ except ImportError:
     PySpin = None
     warnings.warn("PySpin not installed. Install to use FLIR cameras.")
 
+import time
+import numpy as np
+
 
 class FLIR(Camera):
     """
@@ -23,7 +26,7 @@ class FLIR(Camera):
 
     sdk = None
 
-    ### Initialization and termination ###
+    # Initialization and termination
 
     def __init__(self, serial="", pitch_um=None, verbose=True, **kwargs):
         """
@@ -54,10 +57,9 @@ class FLIR(Camera):
 
         if verbose:
             print("Looking for cameras... ", end="")
-        # Note: using FLIR.sdk instead of PySpin.sdk
+
         camera_list = FLIR.sdk.GetCameras()
         if verbose:
-            print(f"found {camera_list.GetSize()} cameras.")
             print("success")
 
         if verbose:
@@ -70,8 +72,8 @@ class FLIR(Camera):
 
         # Initialize the base Camera class with sensor dimensions and bitdepth.
         super().__init__(
-            (self.cam.SensorWidth.get(), self.cam.SensorHeight.get()),
-            bitdepth=int(self.cam.PixelSize.get()),
+            (self.cam.SensorWidth, self.cam.SensorHeight),
+            bitdepth=int(self.cam.PixelSize()),
             pitch_um=pitch_um,
             name=serial,
             **kwargs,
@@ -83,8 +85,8 @@ class FLIR(Camera):
         except Exception as e:
             warnings.warn("Could not disable auto exposure: " + str(e))
 
-        # Begin image acquisition so _get_image_hw works later.
-        self.cam.BeginAcquisition()
+        if not self.cam.IsStreaming():
+            self.cam.BeginAcquisition()
 
     def close(self, close_sdk=True):
         """Cleanly end acquisition and deinitialize the camera."""
@@ -99,12 +101,12 @@ class FLIR(Camera):
             FLIR.sdk.ReleaseInstance()
             FLIR.sdk = None
 
-    ### Property Configuration ###
+    # Property Configuration
 
     def get_exposure(self):
         """Get the current exposure time in seconds."""
         # Assume the camera returns exposure in microseconds.
-        exposure_us = self.cam.ExposureTime.get()
+        exposure_us = self.cam.ExposureTime()
         return exposure_us / 1e6
 
     def set_exposure(self, exposure_s):
@@ -127,56 +129,48 @@ class FLIR(Camera):
             # If limits are not available, proceed without checking.
             pass
 
-        self.cam.ExposureTime.set(exposure_us)
+        self.cam.ExposureTime.SetValue(exposure_us)
+        time.sleep(0.5)  # Wait for exposure to settle.
 
     def set_woi(self, window=None):
-        """Set the window of interest (WOI) for the camera.
+        """See :meth:`.Camera.set_woi`."""
+        return
+
+    def _get_image_hw(self, timeout_s):
+        """
+        Fetches a single image from the camera hardware with a specified timeout.
 
         Parameters
         ----------
-        window : tuple or None
-            Tuple in the form (x_offset, y_offset, width, height). If None, resets to full sensor.
-        """
-        sensor_width = self.cam.SensorWidth.get()
-        sensor_height = self.cam.SensorHeight.get()
+        timeout_s : float
+            The time in seconds to wait for each frame to be fetched.
+            Use a negative value for blocking (infinite wait) and 0 for non-blocking mode.
 
-        if window is None:
-            window = (0, 0, sensor_width, sensor_height)
+        Returns
+        -------
+        image : numpy.ndarray
+            The captured image as a NumPy array (dtype: uint8).
+        """
+        # Determine the timeout based on timeout_s
+        if timeout_s < 0:
+            timeout = PySpin.EVENT_TIMEOUT_INFINITE
+        elif timeout_s == 0:
+            timeout = PySpin.EVENT_TIMEOUT_NONE
         else:
-            if len(window) != 4:
-                raise ValueError(
-                    "Window must be a tuple of (x_offset, y_offset, width, height)."
-                )
+            # Convert seconds to milliseconds (PySpin typically expects ms)
+            timeout = int(timeout_s * 1000)
 
-        x_offset, y_offset, width, height = window
-
-        # Check that the window is within sensor bounds.
-        if (
-            x_offset < 0
-            or y_offset < 0
-            or x_offset + width > sensor_width
-            or y_offset + height > sensor_height
-        ):
-            raise ValueError("Window dimensions are out of sensor bounds.")
-
-        self.cam.OffsetX.set(x_offset)
-        self.cam.OffsetY.set(y_offset)
-        self.cam.Width.set(width)
-        self.cam.Height.set(height)
-
-    def _get_image_hw(self, blocking=True):
-        """
-        Get an image from the camera hardware.
-
-        Parameters
-        ----------
-        blocking : bool
-            Whether to wait for the camera to return a frame, blocking other acquisition.
-        """
-        timeout = (
-            PySpin.EVENT_TIMEOUT_INFINITE if blocking else PySpin.EVENT_TIMEOUT_NONE
-        )
         frame = self.cam.GetNextImage(timeout)
-        image = frame.GetNDArray()
+
+        # Check that the frame is valid
+        if not frame.IsValid():
+            raise RuntimeError("Failed to acquire a valid image frame.")
+
+        width = frame.GetWidth()
+        height = frame.GetHeight()
+        # Convert the frame data into a NumPy array and reshape it based on image dimensions.
+        image = np.array(frame.GetData(), dtype=np.uint8).reshape((height, width))
+
         frame.Release()  # Always release the frame to free memory.
+
         return image
