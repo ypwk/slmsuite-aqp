@@ -72,6 +72,16 @@ class FLIR(Camera):
         self.cam.Init()
 
         # Initialize the base Camera class with sensor dimensions and bitdepth.
+
+        # Optionally disable auto exposure by setting the node (if available)
+        try:
+            self.cam.ExposureAuto.SetValue(PySpin.ExposureAuto_Off)
+        except Exception as e:
+            warnings.warn("Could not disable auto exposure: " + str(e))
+
+        if not self.cam.IsStreaming():
+            self.cam.BeginAcquisition()
+        
         super().__init__(
             (self.cam.SensorWidth, self.cam.SensorHeight),
             bitdepth=int(self.cam.PixelSize()),
@@ -79,15 +89,6 @@ class FLIR(Camera):
             name=serial,
             **kwargs,
         )
-
-        # Optionally disable auto exposure by setting the node (if available)
-        try:
-            self.cam.ExposureAuto.set(PySpin.ExposureAuto_Off)
-        except Exception as e:
-            warnings.warn("Could not disable auto exposure: " + str(e))
-
-        if not self.cam.IsStreaming():
-            self.cam.BeginAcquisition()
 
     def close(self, close_sdk=True):
         """Cleanly end acquisition and deinitialize the camera."""
@@ -137,7 +138,7 @@ class FLIR(Camera):
         """See :meth:`.Camera.set_woi`."""
         return
 
-    def _get_image_hw(self, timeout_s):
+    def _get_image_hw(self, timeout_s = 5):
         """
         Fetches a single image from the camera hardware with a specified timeout.
 

@@ -374,6 +374,7 @@ class Camera(_Picklable):
             try:
                 return self._get_image_hw(*args, **kwargs)
             except Exception as e:
+                print(e)
                 if i > 0: warnings.warn(f"'{self.name}' _get_image_hw() failed on attempt {i+1}.")
                 err = e
 
