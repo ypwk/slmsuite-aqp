@@ -4,6 +4,7 @@ from .camera import Camera
 
 try:
     import PySpin
+    print("imported pyspin")
 except ImportError:
     PySpin = None
     warnings.warn("PySpin not installed. Install to use FLIR cameras.")

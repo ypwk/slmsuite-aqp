@@ -273,7 +273,7 @@ class Santec(SLM):
             names = name.split(",")
 
             # If the target display_number is not found, then print some debug:
-            if names[0] != "BOE":
+            if names[0] != "LCOS-SLM":
                 # Don't parse status around this one...
                 raise ValueError(
                     "SLM not found at display_number={}. "
