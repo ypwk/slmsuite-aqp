@@ -92,12 +92,13 @@ class FLIR(Camera):
 
     def close(self, close_sdk=True):
         """Cleanly end acquisition and deinitialize the camera."""
-        try:
-            self.cam.EndAcquisition()
-        except Exception as e:
-            warnings.warn("Error ending acquisition: " + str(e))
-        self.cam.DeInit()
-        del self.cam
+        if hasattr(self, 'cam'):
+            try:
+                self.cam.EndAcquisition()
+            except Exception as e:
+                warnings.warn("Error ending acquisition: " + str(e))
+            self.cam.DeInit()
+            del self.cam
 
         if close_sdk and FLIR.sdk is not None:
             FLIR.sdk.ReleaseInstance()
@@ -114,7 +115,7 @@ class FLIR(Camera):
     def set_exposure(self, exposure_s):
         """Set the camera exposure time in seconds."""
         # Ensure auto exposure is off
-        self.cam.ExposureAuto.set(PySpin.ExposureAuto_Off)
+        self.cam.ExposureAuto.SetValue(PySpin.ExposureAuto_Off)
         exposure_us = exposure_s * 1e6
 
         # Optionally check camera limits, if available.
@@ -162,17 +163,26 @@ class FLIR(Camera):
             # Convert seconds to milliseconds (PySpin typically expects ms)
             timeout = int(timeout_s * 1000)
 
-        frame = self.cam.GetNextImage(timeout)
+        while True:
+            try:
+                # Use a non-blocking call to get any available frame.
+                flushed_frame = self.cam.GetNextImage(PySpin.EVENT_TIMEOUT_NONE)
+                if flushed_frame.IsValid():
+                    flushed_frame.Release()  # Discard the old frame
+                else:
+                    break  # No valid frame means the buffer is empty
+            except PySpin.SpinnakerException:
+                # Likely no image available; exit the loop
+                break
 
-        # Check that the frame is valid
+        # Now get the current image with your desired timeout
+        frame = self.cam.GetNextImage(timeout)
         if not frame.IsValid():
             raise RuntimeError("Failed to acquire a valid image frame.")
 
         width = frame.GetWidth()
         height = frame.GetHeight()
-        # Convert the frame data into a NumPy array and reshape it based on image dimensions.
         image = np.array(frame.GetData(), dtype=np.uint8).reshape((height, width))
-
-        frame.Release()  # Always release the frame to free memory.
+        frame.Release()
 
         return image
