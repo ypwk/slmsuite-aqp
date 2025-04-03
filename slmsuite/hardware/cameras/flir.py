@@ -11,6 +11,7 @@ except ImportError:
 
 import time
 import numpy as np
+import ctypes
 
 
 class FLIR(Camera):
@@ -162,18 +163,20 @@ class FLIR(Camera):
         else:
             # Convert seconds to milliseconds (PySpin typically expects ms)
             timeout = int(timeout_s * 1000)
+            
 
-        while True:
-            try:
-                # Use a non-blocking call to get any available frame.
-                flushed_frame = self.cam.GetNextImage(PySpin.EVENT_TIMEOUT_NONE)
-                if flushed_frame.IsValid():
-                    flushed_frame.Release()  # Discard the old frame
-                else:
-                    break  # No valid frame means the buffer is empty
-            except PySpin.SpinnakerException:
-                # Likely no image available; exit the loop
-                break
+        # while True:
+        #     try:
+        #         # Use a non-blocking call to get any available frame.
+        #         flushed_frame = self.cam.GetNextImage(PySpin.EVENT_TIMEOUT_NONE)
+        #         if flushed_frame.IsValid():
+        #             flushed_frame.Release()  # Discard the old frame
+        #         else:
+        #             break  # No valid frame means the buffer is empty
+        #     except PySpin.SpinnakerException:
+        #         # Likely no image available; exit the loop
+        #         print()
+        #         break
 
         # Now get the current image with your desired timeout
         frame = self.cam.GetNextImage(timeout)
@@ -182,7 +185,26 @@ class FLIR(Camera):
 
         width = frame.GetWidth()
         height = frame.GetHeight()
+        frame_data = frame.GetData()
+        print(frame_data)
         image = np.array(frame.GetData(), dtype=np.uint8).reshape((height, width))
-        frame.Release()
+        # frame.Release()
 
         return image
+            
+    
+    def flush(self, timout = 1):
+         i=0
+         while True:
+            try:
+                # Use a non-blocking call to get any available frame.
+                flushed_frame = self.cam.GetNextImage(PySpin.EVENT_TIMEOUT_NONE)
+                print(i)
+                if flushed_frame.IsValid():
+                    flushed_frame.Release()  # Discard the old frame
+                else:
+                    break  # No valid frame means the buffer is empty
+            except Exception as e:
+                # Likely no image available; exit the loop
+                print(e)
+                break

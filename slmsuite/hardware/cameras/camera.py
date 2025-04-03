@@ -372,7 +372,9 @@ class Camera(_Picklable):
 
         for i in range(self.capture_attempts):
             try:
-                return self._get_image_hw(*args, **kwargs)
+                image = self._get_image_hw(*args, **kwargs)
+                print(image)
+                return image
             except Exception as e:
                 print(e)
                 if i > 0: warnings.warn(f"'{self.name}' _get_image_hw() failed on attempt {i+1}.")
@@ -549,7 +551,9 @@ class Camera(_Picklable):
         numpy.ndarray of int OR float
             Array of shape :attr:`~slmsuite.hardware.cameras.camera.Camera.shape`.
         """
+        print("getting image")
         # Parse acquisition options.
+        self.flush()
         averaging = self._parse_averaging(averaging)
         (exposures, exposure_power) = self._parse_hdr(hdr)
 
