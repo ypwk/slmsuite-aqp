@@ -186,7 +186,6 @@ class FLIR(Camera):
         width = frame.GetWidth()
         height = frame.GetHeight()
         frame_data = frame.GetData()
-        print(frame_data)
         image = np.array(frame.GetData(), dtype=np.uint8).reshape((height, width))
         # frame.Release()
 
@@ -194,12 +193,10 @@ class FLIR(Camera):
             
     
     def flush(self, timout = 1):
-         i=0
-         while True:
+        while not self.cam.TLStream.StreamAnnouncedBufferCount.GetValue() == self.cam.TLStream.StreamInputBufferCount.GetValue():
             try:
                 # Use a non-blocking call to get any available frame.
                 flushed_frame = self.cam.GetNextImage(PySpin.EVENT_TIMEOUT_NONE)
-                print(i)
                 if flushed_frame.IsValid():
                     flushed_frame.Release()  # Discard the old frame
                 else:

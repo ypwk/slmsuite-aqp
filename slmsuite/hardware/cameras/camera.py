@@ -373,7 +373,6 @@ class Camera(_Picklable):
         for i in range(self.capture_attempts):
             try:
                 image = self._get_image_hw(*args, **kwargs)
-                print(image)
                 return image
             except Exception as e:
                 print(e)
@@ -490,7 +489,8 @@ class Camera(_Picklable):
 
     def get_image(self, timeout_s=1, transform=True, hdr=None, averaging=None):
         """
-        Capture, process, and return images from a camera.
+        Capture, process, and return images from a camera. Automatically flushes buffer
+        before capturing image  
 
         Tip
         ~~~
@@ -551,7 +551,6 @@ class Camera(_Picklable):
         numpy.ndarray of int OR float
             Array of shape :attr:`~slmsuite.hardware.cameras.camera.Camera.shape`.
         """
-        print("getting image")
         # Parse acquisition options.
         self.flush()
         averaging = self._parse_averaging(averaging)
@@ -603,7 +602,6 @@ class Camera(_Picklable):
                 self.viewer.render(img / averaging)
             else:
                 self.viewer.render(img)
-
         return img
 
     def get_images(self, image_count, timeout_s=1, out=None, transform=True, flush=False):
