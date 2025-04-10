@@ -84,7 +84,7 @@ class FLIR(Camera):
             self.cam.BeginAcquisition()
         
         super().__init__(
-            (self.cam.SensorWidth, self.cam.SensorHeight),
+            (self.cam.SensorWidth.GetValue(), self.cam.SensorHeight.GetValue()),
             bitdepth=int(self.cam.PixelSize()),
             pitch_um=pitch_um,
             name=serial,
@@ -205,3 +205,6 @@ class FLIR(Camera):
                 # Likely no image available; exit the loop
                 print(e)
                 break
+
+        # def close(self):
+        #     self.close(close_sdk=True)
