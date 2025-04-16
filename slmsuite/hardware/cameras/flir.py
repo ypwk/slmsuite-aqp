@@ -179,6 +179,7 @@ class FLIR(Camera):
         #         break
 
         # Now get the current image with your desired timeout
+        self.flush()
         frame = self.cam.GetNextImage(timeout)
         if not frame.IsValid():
             raise RuntimeError("Failed to acquire a valid image frame.")
