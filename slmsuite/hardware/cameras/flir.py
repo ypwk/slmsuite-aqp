@@ -77,6 +77,8 @@ class FLIR(Camera):
         # Optionally disable auto exposure by setting the node (if available)
         try:
             self.cam.ExposureAuto.SetValue(PySpin.ExposureAuto_Off)
+            self.cam.GainAuto.SetValue(PySpin.GainAuto_Off)
+            self.cam.Gain.SetValue(0.0)
         except Exception as e:
             warnings.warn("Could not disable auto exposure: " + str(e))
 
