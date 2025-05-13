@@ -259,8 +259,14 @@ class CompressedSpotHologram(_AbstractSpotHologram):
 
         # Check to make sure spots are within bounds
         kmax = 1.0 / np.min(cameraslm.slm.pitch) / 2.0
+        # print(np.abs(self.spot_kxy[:2,:])>kmax)
         if np.any(np.abs(self.spot_kxy[:2, :]) > kmax):
-            raise ValueError("Spots laterally outside the bounds of the farfield")
+            warnings.warn("Spots laterally outside the bounds of the farfield")
+            mask = np.all(np.abs(self.spot_kxy[:2, :]) <= kmax, axis =0)
+            self.spot_kxy = self.spot_kxy[:, mask]
+
+        # print(np.abs(self.spot_kxy[:2,:])>kmax)
+
 
         # Generate ij point spread function (psf)
         if cameraslm is not None:

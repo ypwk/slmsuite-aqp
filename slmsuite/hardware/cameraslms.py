@@ -876,6 +876,7 @@ class FourierSLM(CameraSLM):
         plot=False,
         autofocus=False,
         autoexposure=False,
+        verbose = True,
         **kwargs,
     ):
         """
@@ -958,6 +959,11 @@ class FourierSLM(CameraSLM):
         # The first two points are ignored for balance against the parity check omission
         # of the last two points.
         array_center = np.mean(hologram.spot_kxy_rounded[:, 2:], axis=1)
+
+        # if verbose: 
+        #     print(array_center)
+        #     print(hologram.spot_kxy_rounded)
+
 
         if plot > 1:
             hologram.plot_farfield()
@@ -1631,8 +1637,10 @@ class FourierSLM(CameraSLM):
                 dat = self.calibrations["wavefront_zernike"]
                 calibration_points = np.copy(dat["corrected_spots"])
                 zernike_indices = np.copy(dat["zernike_indices"])
+                print("building on top of correction data from a previous iteration")
             else:
                 calibration_points = 100
+                print("set caliration points to the default 100")
         if np.isscalar(calibration_points):
             pitch = np.sqrt(np.prod(self.cam.shape) / calibration_points)
             calibration_points = self.wavefront_calibration_points(pitch, plot=True)
@@ -1835,6 +1843,7 @@ class FourierSLM(CameraSLM):
         fresh_calibration=True,
         measure_background=False,
         corrected_amplitude=False,
+        edge_exposure_gain=0.0,
         # integrate_amplitude=True,
         plot=0,
     ):
@@ -2275,7 +2284,8 @@ class FourierSLM(CameraSLM):
                 target_phase=None,
                 reference_blaze=reference_blazes,
                 target_blaze=calibration_blazes,
-                plot=False
+                plot=False,
+                exposure_gain=False,
             ):
             """
             Helper function for making superpixel phase masks.
@@ -2328,7 +2338,33 @@ class FourierSLM(CameraSLM):
                 plt.show()
 
             self.slm.set_phase(matrix, settle=True)
-            return self.cam.get_image()
+
+            # Adjust camera exposure based on superpixel location
+            if exposure_gain:
+                orig_exposure = self.cam.get_exposure()
+                if edge_exposure_gain > 0 and schedule is not None:
+                    # Coordinates of the active superpixels
+                    coords = index2coord(schedule)  # shape (2, N)
+                    # Center of the SLM grid
+                    center = np.array(slm_supershape)[:, None] / 2  # shape (2,1)
+                    # Distances to center
+                    distances = np.linalg.norm(coords - center, axis=0)
+                    # Max distance in the grid
+                    max_dist = np.linalg.norm(np.array(slm_supershape) / 2)
+                    # Compute gain per superpixel (1 at center → up to 1+gain at corners)
+                    gains = 1 + edge_exposure_gain * (distances / max_dist)
+                    # Apply the averaged gain to exposure
+                    new_exposure = orig_exposure * np.mean(gains)
+                    self.cam.set_exposure(new_exposure)
+
+                img = self.cam.get_image()
+
+                # Restore the original exposure
+                self.cam.set_exposure(orig_exposure)
+            else:
+                img = self.cam.get_image()
+
+            return img
 
         def fit_phase(phases, intensities, plot_fits=False):
             """
@@ -2731,7 +2767,7 @@ class FourierSLM(CameraSLM):
             norm = take_interference_regions(norm_image)
 
             # Step 1: Measure the position of the target mode.
-            position_image = superpixels(schedule, None, 0)
+            position_image = superpixels(schedule, None, 0, exposure_gain=True)
             plot_labeled(schedule, position_image, plot=plot, title="Base Target Diffraction")
             found_centers = find_centers(position_image)
 

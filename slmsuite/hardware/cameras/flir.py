@@ -72,6 +72,9 @@ class FLIR(Camera):
             self.cam = camera_list.GetBySerial(serial)
         self.cam.Init()
 
+        if verbose:
+            print("success")
+            
         # Initialize the base Camera class with sensor dimensions and bitdepth.
 
         # Optionally disable auto exposure by setting the node (if available)
@@ -195,7 +198,7 @@ class FLIR(Camera):
         return image
             
     
-    def flush(self, timout = 1):
+    def flush(self, timeout = 1):
         while not self.cam.TLStream.StreamAnnouncedBufferCount.GetValue() == self.cam.TLStream.StreamInputBufferCount.GetValue():
             try:
                 # Use a non-blocking call to get any available frame.
