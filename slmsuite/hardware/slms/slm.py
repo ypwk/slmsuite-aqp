@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import warnings
 
+from abc import ABC, abstractmethod
+
 from slmsuite import __version__
 from slmsuite.hardware import _Picklable
 from slmsuite.holography import toolbox
@@ -18,7 +20,7 @@ from slmsuite.holography import analysis
 from slmsuite.misc.files import generate_path, latest_path, save_h5, load_h5
 
 
-class SLM(_Picklable):
+class SLM(_Picklable, ABC):
     """
     Abstract class for SLMs.
 
@@ -111,6 +113,7 @@ class SLM(_Picklable):
         "display",
     ]
 
+    @abstractmethod
     def __init__(
         self,
         resolution,
@@ -187,14 +190,15 @@ class SLM(_Picklable):
 
         # Decide dtype
         if self.bitdepth <= 8:
-            self.dtype = np.uint8
+            self.dtype = np.dtype(np.uint8)
         else:
-            self.dtype = np.uint16
+            self.dtype = np.dtype(np.uint16)
 
         # Display caches for user reference.
         self.phase = np.zeros(self.shape)
         self.display = np.zeros(self.shape, dtype=self.dtype)
 
+    @abstractmethod
     def close(self):
         """Abstract method to close the SLM and delete related objects."""
         raise NotImplementedError()
@@ -208,7 +212,7 @@ class SLM(_Picklable):
     @staticmethod
     def info(verbose=True):
         """
-        Abstract method to load display information.
+        Abstract method to load display information. Unsupported by this SLM.
 
         Parameters
         ----------
@@ -351,6 +355,7 @@ class SLM(_Picklable):
         phase,
         phase_correct=True,
         settle=False,
+        **kwargs,
     ):
         "Backwards-compatibility alias for :meth:`set_phase()`."
         warnings.warn(
@@ -358,8 +363,9 @@ class SLM(_Picklable):
             "in favor of SLM.set_phase in a future release."
         )
 
-        self.set_phase(phase, phase_correct, settle)
+        self.set_phase(phase, phase_correct, settle, **kwargs)
 
+    @abstractmethod
     def _set_phase_hw(self, phase):
         """
         Abstract method to communicate with the SLM. Subclasses **should** overwrite this.
@@ -377,6 +383,7 @@ class SLM(_Picklable):
         phase,
         phase_correct=True,
         settle=False,
+        **kwargs
     ):
         r"""
         Checks, cleans, and adds to data, then sends the data to the SLM and
@@ -466,6 +473,8 @@ class SLM(_Picklable):
             Whether or not to add :attr:`~slmsuite.hardware.slms.slm.SLM.source```["phase"]`` to ``phase``.
         settle : bool
             Whether to sleep for :attr:`~slmsuite.hardware.slms.slm.SLM.settle_time_s`.
+        **kwargs
+            Passed to the SLM in case the subclass needs to do something special.
 
         Returns
         -------
@@ -544,7 +553,7 @@ class SLM(_Picklable):
                 self.display = self._phase2gray(self.phase, out=self.display)
 
         # Write!
-        self._set_phase_hw(self.display)
+        self._set_phase_hw(self.display, **kwargs)
 
         # Optional delay.
         if settle:
@@ -731,7 +740,7 @@ class SLM(_Picklable):
         """
         In the absence of a proper wavefront calibration, sets
         :attr:`~slmsuite.hardware.slms.slm.SLM.source` amplitude and phase using a
-        `fit_function` from :mod:`~slmsuite.misc.fitfunctions`.
+        ``fit_function`` from :mod:`~slmsuite.holography.analysis.fitfunctions`.
 
         Note
         ~~~~
@@ -994,13 +1003,15 @@ class SLM(_Picklable):
         else:
             return np.zeros(self.shape)
 
-    def plot_source(self, sim=False, power=False):
+    def plot_source(self, source=None, sim=False, power=False):
         """
         Plots measured or simulated amplitude and phase distribution
         of the SLM illumination. Also plots the rsquared goodness of fit value if available.
 
         Parameters
         ----------
+        source : dict OR None
+            The data to plot. If ``None``, uses :attr:`source`.
         sim : bool
             Plots the simulated source distribution if ``True`` or the measured
             source distribution if ``False``.
@@ -1012,23 +1023,24 @@ class SLM(_Picklable):
         matplotlib.pyplot.axis
             Axis handles for the generated plot.
         """
+        if source is None:
+            source = self.source
 
         # Check if proper source keywords are present
-        if sim and not np.all([k in self.source for k in ("amplitude_sim", "phase_sim")]):
+        if sim and not np.all([k in source for k in ("amplitude_sim", "phase_sim")]):
             raise RuntimeError("Simulated amplitude and/or phase keywords missing from slm.source!")
-        elif not sim and not np.all([k in self.source for k in ("amplitude", "phase")]):
+        elif not sim and not np.all([k in source for k in ("amplitude", "phase")]):
             raise RuntimeError(
                 "'amplitude' or 'phase' keywords missing from slm.source! Run "
                 ".wavefront_calibrate() or .set_source_analytic() to measure source profile."
             )
 
-        plot_r2 = not sim and "r2" in self.source
+        plot_r2 = not sim and "r2" in source
 
         _, axs = plt.subplots(1, 3 if plot_r2 else 2, figsize=(10, 6))
 
         im = axs[0].imshow(
-            # self._phase2gray(self.source["phase_sim" if sim else "phase"]),
-            np.mod(self.source["phase_sim" if sim else "phase"], 2*np.pi),
+            np.mod(source["phase_sim" if sim else "phase"], 2*np.pi),
             cmap=plt.get_cmap("twilight"),
             interpolation="none",
         )
@@ -1042,12 +1054,12 @@ class SLM(_Picklable):
 
         if power:
             im = axs[1].imshow(
-                np.square(self.source["amplitude_sim" if sim else "amplitude"]),
+                np.square(source["amplitude_sim" if sim else "amplitude"]),
                 clim=(0, 1)
             )
             axs[1].set_title("Simulated Source Power" if sim else "Source Power")
         else:
-            im = axs[1].imshow(self.source["amplitude_sim" if sim else "amplitude"], clim=(0, 1))
+            im = axs[1].imshow(source["amplitude_sim" if sim else "amplitude"], clim=(0, 1))
             axs[1].set_title("Simulated Source Amplitude" if sim else "Source Amplitude")
         axs[1].set_xlabel("SLM $x$ [pix]")
         axs[1].set_ylabel("SLM $y$ [pix]")
@@ -1057,7 +1069,7 @@ class SLM(_Picklable):
         plt.colorbar(im, cax=cax)
 
         if plot_r2:
-            im = axs[2].imshow(self.source["r2"], clim=(0, 1))
+            im = axs[2].imshow(source["r2"], clim=(0, 1))
             axs[2].set_title("Cal Fitting $R^2$")
             axs[2].set_xlabel("SLM $x$ [superpix]")
             axs[2].set_ylabel("SLM $y$ [superpix]")
