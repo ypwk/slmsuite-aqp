@@ -112,13 +112,13 @@ class FLIR(Camera):
 
     # Property Configuration
 
-    def get_exposure(self):
+    def _get_exposure_hw(self):
         """Get the current exposure time in seconds."""
         # Assume the camera returns exposure in microseconds.
         exposure_us = self.cam.ExposureTime()
         return exposure_us / 1e6
 
-    def set_exposure(self, exposure_s):
+    def _set_exposure_hw(self, exposure_s):
         """Set the camera exposure time in seconds."""
         # Ensure auto exposure is off
         self.cam.ExposureAuto.SetValue(PySpin.ExposureAuto_Off)
